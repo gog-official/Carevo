@@ -1,0 +1,1 @@
+ALTER TABLE roadmap_steps DROP COLUMN IF EXISTS links;

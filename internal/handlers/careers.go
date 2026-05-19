@@ -1,0 +1,244 @@
+package handlers
+
+import (
+	"database/sql"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/guruorgoru/carevo/internal/models"
+	"github.com/jmoiron/sqlx"
+)
+
+type CareerHandler struct {
+	db *sqlx.DB
+}
+
+func NewCareerHandler(db *sqlx.DB) *CareerHandler {
+	return &CareerHandler{db: db}
+}
+
+func (h *CareerHandler) List(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 50 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	category := r.URL.Query().Get("category")
+	tag := r.URL.Query().Get("tag")
+
+	where := []string{"1=1"}
+	args := []any{}
+	argN := 1
+
+	if category != "" {
+		where = append(where, "c.category_id = (SELECT id FROM categories WHERE slug = $"+strconv.Itoa(argN)+")")
+		args = append(args, category)
+		argN++
+	}
+
+	if tag != "" {
+		where = append(where, "c.id IN (SELECT career_id FROM career_tags WHERE tag = $"+strconv.Itoa(argN)+")")
+		args = append(args, tag)
+		argN++
+	}
+
+	whereClause := strings.Join(where, " AND ")
+
+	var total int
+	countQuery := `SELECT COUNT(*) FROM careers c WHERE ` + whereClause
+	if err := h.db.Get(&total, countQuery, args...); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	var careers []models.Career
+	query := `SELECT c.*, cat.name as category_name, cat.slug as category_slug
+		FROM careers c
+		JOIN categories cat ON cat.id = c.category_id
+		WHERE ` + whereClause + `
+		ORDER BY c.id
+		LIMIT $` + strconv.Itoa(argN) + ` OFFSET $` + strconv.Itoa(argN+1)
+	args = append(args, limit, offset)
+
+	if err := h.db.Select(&careers, query, args...); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	type careerResponse struct {
+		models.Career
+		SalaryRange models.SalaryRange `json:"salary_range"`
+		Tags        []string           `json:"tags,omitempty"`
+	}
+
+	resp := make([]careerResponse, len(careers))
+	for i, c := range careers {
+		tags := []string{}
+		h.db.Select(&tags, `SELECT tag FROM career_tags WHERE career_id = $1 ORDER BY tag`, c.ID)
+		resp[i] = careerResponse{Career: c, SalaryRange: c.SalaryRange(), Tags: tags}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"careers":    resp,
+		"page":       page,
+		"limit":      limit,
+		"total":      total,
+		"total_pages": (total + limit - 1) / limit,
+	})
+}
+
+func (h *CareerHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+
+	var career models.Career
+	query := `SELECT c.*, cat.name as category_name, cat.slug as category_slug
+		FROM careers c
+		JOIN categories cat ON cat.id = c.category_id
+		WHERE c.slug = $1`
+	if err := h.db.Get(&career, query, slug); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "career not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	tags := []string{}
+	h.db.Select(&tags, `SELECT tag FROM career_tags WHERE career_id = $1 ORDER BY tag`, career.ID)
+
+	type careerDetail struct {
+		models.Career
+		SalaryRange models.SalaryRange `json:"salary_range"`
+		Tags        []string           `json:"tags"`
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"career": careerDetail{Career: career, SalaryRange: career.SalaryRange(), Tags: tags},
+	})
+}
+
+func (h *CareerHandler) Search(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query parameter 'q' is required"})
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 50 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	var total int
+	err := h.db.Get(&total, `
+		SELECT COUNT(*) FROM careers c
+		WHERE to_tsvector('english', coalesce(c.title,'') || ' ' || coalesce(c.description,'') || ' ' || coalesce(c.summary,''))
+		@@ plainto_tsquery('english', $1)`, q)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search error"})
+		return
+	}
+
+	var careers []models.Career
+	err = h.db.Select(&careers, `
+		SELECT c.*, cat.name as category_name, cat.slug as category_slug,
+			ts_rank(to_tsvector('english', coalesce(c.title,'') || ' ' || coalesce(c.description,'') || ' ' || coalesce(c.summary,'')),
+				plainto_tsquery('english', $1)) as rank
+		FROM careers c
+		JOIN categories cat ON cat.id = c.category_id
+		WHERE to_tsvector('english', coalesce(c.title,'') || ' ' || coalesce(c.description,'') || ' ' || coalesce(c.summary,''))
+		@@ plainto_tsquery('english', $1)
+		ORDER BY rank DESC
+		LIMIT $2 OFFSET $3`, q, limit, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search error"})
+		return
+	}
+
+	type searchResult struct {
+		models.Career
+		SalaryRange models.SalaryRange `json:"salary_range"`
+	}
+
+	resp := make([]searchResult, len(careers))
+	for i, c := range careers {
+		resp[i] = searchResult{Career: c, SalaryRange: c.SalaryRange()}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"careers":     resp,
+		"query":       q,
+		"page":        page,
+		"limit":       limit,
+		"total":       total,
+		"total_pages": (total + limit - 1) / limit,
+	})
+}
+
+func (h *CareerHandler) Categories(w http.ResponseWriter, r *http.Request) {
+	var categories []models.CategoryWithCount
+	err := h.db.Select(&categories, `
+		SELECT cat.*, COUNT(c.id) as career_count
+		FROM categories cat
+		LEFT JOIN careers c ON c.category_id = cat.id
+		GROUP BY cat.id
+		ORDER BY cat.name`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"categories": categories})
+}
+
+func (h *CareerHandler) Resources(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid career id"})
+		return
+	}
+
+	var resources []models.Resource
+	err = h.db.Select(&resources, `SELECT * FROM resources WHERE career_id = $1 ORDER BY sort_order`, id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"resources": resources})
+}
+
+func (h *CareerHandler) Roadmap(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid career id"})
+		return
+	}
+
+	var steps []models.RoadmapStep
+	err = h.db.Select(&steps, `SELECT * FROM roadmap_steps WHERE career_id = $1 ORDER BY step_number`, id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"roadmap": steps})
+}
+
+
