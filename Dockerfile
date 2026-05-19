@@ -14,12 +14,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/seed ./cmd/seed
 
 FROM alpine:3.21 AS api
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN adduser -D -u 1000 user && \
+    apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
-COPY --from=builder /app/server /app/server
-COPY --from=builder /app/migrations /app/migrations
+COPY --from=builder --chown=user /app/server /app/server
+COPY --from=builder --chown=user /app/migrations /app/migrations
+
+USER user
 
 EXPOSE 8080
 
@@ -27,11 +30,14 @@ ENTRYPOINT ["/app/server"]
 
 FROM alpine:3.21 AS seed
 
-RUN apk add --no-cache ca-certificates
+RUN adduser -D -u 1000 user && \
+    apk add --no-cache ca-certificates
 
 WORKDIR /app
 
-COPY --from=builder /app/seed /app/seed
-COPY --from=builder /app/migrations /app/migrations
+COPY --from=builder --chown=user /app/seed /app/seed
+COPY --from=builder --chown=user /app/migrations /app/migrations
+
+USER user
 
 ENTRYPOINT ["/app/seed"]
