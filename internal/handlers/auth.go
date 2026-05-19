@@ -22,6 +22,15 @@ func NewAuthHandler(db *sqlx.DB, jwtService *auth.JWTService) *AuthHandler {
 	return &AuthHandler{db: db, jwtService: jwtService}
 }
 
+// @Summary      Register a new user
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  models.RegisterRequest  true  "Registration details"
+// @Success      201  {object}  map[string]any
+// @Failure      400  {object}  map[string]string
+// @Failure      409  {object}  map[string]string
+// @Router       /auth/register [post]
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req models.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -63,6 +72,14 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"user": user, "tokens": pair})
 }
 
+// @Summary      Log in
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  models.LoginRequest  true  "Login credentials"
+// @Success      200  {object}  map[string]any
+// @Failure      401  {object}  map[string]string
+// @Router       /auth/login [post]
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req models.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -95,6 +112,14 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": user, "tokens": pair})
 }
 
+// @Summary      Refresh access token
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  models.RefreshRequest  true  "Refresh token"
+// @Success      200  {object}  map[string]any
+// @Failure      401  {object}  map[string]string
+// @Router       /auth/refresh [post]
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var req models.RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

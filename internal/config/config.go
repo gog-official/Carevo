@@ -13,6 +13,9 @@ type Config struct {
 	JWTAccessTTL      time.Duration
 	JWTRefreshTTL     time.Duration
 	Port              string
+	RedisURL          string
+	GeminiAPIKey      string
+	GeminiModel       string
 }
 
 func Load() (*Config, error) {
@@ -44,6 +47,9 @@ func Load() (*Config, error) {
 		JWTAccessTTL:      accessTTL,
 		JWTRefreshTTL:     refreshTTL,
 		Port:              getEnv("PORT", "8080"),
+		RedisURL:          getEnv("REDIS_URL", "localhost:6379"),
+		GeminiAPIKey:      getEnv("GEMINI_API_KEY", ""),
+		GeminiModel:       getEnv("GEMINI_MODEL", "gemini-2.0-flash"),
 	}, nil
 }
 

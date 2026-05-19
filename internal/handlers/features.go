@@ -9,19 +9,31 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/guruorgoru/carevo/internal/cache"
 	"github.com/guruorgoru/carevo/internal/middleware"
 	"github.com/guruorgoru/carevo/internal/models"
 	"github.com/jmoiron/sqlx"
 )
 
 type FeatureHandler struct {
-	db *sqlx.DB
+	db    *sqlx.DB
+	cache *cache.Store
 }
 
-func NewFeatureHandler(db *sqlx.DB) *FeatureHandler {
-	return &FeatureHandler{db: db}
+func NewFeatureHandler(db *sqlx.DB, cacheStore *cache.Store) *FeatureHandler {
+	return &FeatureHandler{db: db, cache: cacheStore}
 }
 
+// @Summary      Bookmark a career
+// @Tags         bookmarks
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body  models.BookmarkRequest  true  "Career ID"
+// @Success      201  {object}  map[string]string
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Router       /users/me/bookmarks [post]
 func (h *FeatureHandler) BookmarkCareer(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.UserFromCtx(r.Context())
 	if claims == nil {
@@ -54,6 +66,13 @@ func (h *FeatureHandler) BookmarkCareer(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "bookmarked"})
 }
 
+// @Summary      List bookmarked careers
+// @Tags         bookmarks
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]any
+// @Failure      401  {object}  map[string]string
+// @Router       /users/me/bookmarks [get]
 func (h *FeatureHandler) ListBookmarks(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.UserFromCtx(r.Context())
 	if claims == nil {
@@ -80,6 +99,16 @@ func (h *FeatureHandler) ListBookmarks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"bookmarks": bookmarks})
 }
 
+// @Summary      Start a 30-day challenge
+// @Tags         challenges
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body  models.CreateChallengeRequest  true  "Career ID"
+// @Success      201  {object}  map[string]any
+// @Failure      400  {object}  map[string]string
+// @Failure      409  {object}  map[string]string
+// @Router       /challenges [post]
 func (h *FeatureHandler) StartChallenge(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.UserFromCtx(r.Context())
 	if claims == nil {
@@ -121,6 +150,13 @@ func (h *FeatureHandler) StartChallenge(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, map[string]any{"challenge": challenge})
 }
 
+// @Summary      Get active challenge
+// @Tags         challenges
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]any
+// @Failure      401  {object}  map[string]string
+// @Router       /challenges/active [get]
 func (h *FeatureHandler) ActiveChallenge(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.UserFromCtx(r.Context())
 	if claims == nil {
@@ -148,6 +184,16 @@ func (h *FeatureHandler) ActiveChallenge(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"challenge": challenge})
 }
 
+// @Summary      Daily check-in for a challenge
+// @Tags         challenges
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id   path  int  true  "Challenge ID"
+// @Success      200  {object}  map[string]any
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      403  {object}  map[string]string
+// @Router       /challenges/{id}/checkin [post]
 func (h *FeatureHandler) DailyCheckin(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.UserFromCtx(r.Context())
 	if claims == nil {
@@ -236,6 +282,16 @@ func (h *FeatureHandler) DailyCheckin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// @Summary      Get challenge progress
+// @Tags         challenges
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id   path  int  true  "Challenge ID"
+// @Success      200  {object}  map[string]any
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      403  {object}  map[string]string
+// @Router       /challenges/{id}/progress [get]
 func (h *FeatureHandler) ChallengeProgress(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.UserFromCtx(r.Context())
 	if claims == nil {
@@ -286,6 +342,17 @@ func (h *FeatureHandler) ChallengeProgress(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"progress": progress})
 }
 
+// @Summary      Submit a project idea
+// @Tags         projects
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path  int                                 true  "Career ID"
+// @Param        body  body  models.CreateProjectIdeaRequest     true  "Project idea"
+// @Success      201  {object}  map[string]any
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Router       /careers/{id}/projects [post]
 func (h *FeatureHandler) CreateProjectIdea(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.UserFromCtx(r.Context())
 	if claims == nil {
@@ -330,6 +397,13 @@ func (h *FeatureHandler) CreateProjectIdea(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusCreated, map[string]any{"project_idea": idea})
 }
 
+// @Summary      Browse project ideas for a career
+// @Tags         projects
+// @Produce      json
+// @Param        id   path  int  true  "Career ID"
+// @Success      200  {object}  map[string]any
+// @Failure      400  {object}  map[string]string
+// @Router       /careers/{id}/projects [get]
 func (h *FeatureHandler) ListProjectIdeas(w http.ResponseWriter, r *http.Request) {
 	careerID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {

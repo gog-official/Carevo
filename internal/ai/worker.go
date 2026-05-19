@@ -1,0 +1,203 @@
+package ai
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/guruorgoru/carevo/internal/models"
+	"github.com/jmoiron/sqlx"
+)
+
+type Worker struct {
+	db       *sqlx.DB
+	provider *GeminiProvider
+	jobs     chan int64
+}
+
+func NewWorker(db *sqlx.DB, provider *GeminiProvider) *Worker {
+	return &Worker{
+		db:       db,
+		provider: provider,
+		jobs:     make(chan int64, 100),
+	}
+}
+
+func (w *Worker) Start(ctx context.Context) {
+	go w.run(ctx)
+}
+
+func (w *Worker) Submit(userID int64) {
+	select {
+	case w.jobs <- userID:
+	default:
+		log.Printf("worker queue full, dropping job for user %d", userID)
+	}
+}
+
+func (w *Worker) run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case userID := <-w.jobs:
+			w.process(ctx, userID)
+		}
+	}
+}
+
+type surveyQA struct {
+	Question string `json:"question"`
+	Answer   any    `json:"answer"`
+}
+
+func (w *Worker) process(ctx context.Context, userID int64) {
+	_, err := w.db.Exec(
+		`INSERT INTO ai_results (user_id, status) VALUES ($1, 'processing')
+		 ON CONFLICT (user_id) DO UPDATE SET status = 'processing', raw_response = NULL, recommended_careers = NULL, completed_at = NULL, error_message = NULL`,
+		userID,
+	)
+	if err != nil {
+		log.Printf("worker: create ai_results for user %d: %v", userID, err)
+		return
+	}
+
+	var responses []struct {
+		QuestionText string          `db:"question_text"`
+		Category     string          `db:"category"`
+		Answer       json.RawMessage `db:"answer"`
+	}
+	err = w.db.Select(&responses, `
+		SELECT sq.question_text, sq.category, sr.answer
+		FROM survey_responses sr
+		JOIN survey_questions sq ON sq.id = sr.question_id
+		WHERE sr.user_id = $1
+		ORDER BY sq.sort_order`, userID)
+	if err != nil {
+		errMsg := err.Error()
+		w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg)
+		log.Printf("worker: fetch responses for user %d: %v", userID, err)
+		return
+	}
+
+	if len(responses) == 0 {
+		errMsg := "no survey responses found"
+		w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg)
+		return
+	}
+
+	var qas []surveyQA
+	for _, r := range responses {
+		var answer any
+		json.Unmarshal(r.Answer, &answer)
+		qas = append(qas, surveyQA{Question: fmt.Sprintf("[%s] %s", r.Category, r.QuestionText), Answer: answer})
+	}
+	qaJSON, _ := json.MarshalIndent(qas, "", "  ")
+
+	var careers []struct {
+		ID    int64  `db:"id"`
+		Title string `db:"title"`
+		Slug  string `db:"slug"`
+	}
+	w.db.Select(&careers, "SELECT id, title, slug FROM careers ORDER BY title")
+
+	var careerNames []string
+	careerMap := make(map[string]int64)
+	for _, c := range careers {
+		careerNames = append(careerNames, fmt.Sprintf("%s (slug: %s)", c.Title, c.Slug))
+		careerMap[strings.ToLower(c.Title)] = c.ID
+	}
+
+	systemPrompt := `You are a career counselor for Nepal. Your job is to match users to careers based on their survey answers.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "recommended_careers": [
+    {
+      "career_title": "Exact Career Title",
+      "score": 85,
+      "reasoning": "2-3 sentence explanation why this career fits"
+    }
+  ]
+}
+
+Rules:
+- Score must be 0-100
+- Return 5-10 career matches sorted by score descending
+- Only use career titles from the provided list
+- Be realistic about Nepal job market conditions
+- Consider education requirements, skills, and local demand`
+
+	userPrompt := fmt.Sprintf(`Here are the user's survey answers:
+%s
+
+Here are the available careers:
+%s
+
+Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerNames, "\n"))
+
+	result, err := w.provider.GenerateJSON(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		errMsg := fmt.Sprintf("AI provider error: %v", err)
+		w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg)
+		log.Printf("worker: ai generate for user %d: %v", userID, err)
+		return
+	}
+
+	var scored models.ScoredCareerList
+	if err := json.Unmarshal([]byte(result), &scored); err != nil {
+		errMsg := fmt.Sprintf("failed to parse AI response: %v", err)
+		w.db.Exec(`UPDATE ai_results SET raw_response = $2, status = 'error', error_message = $3 WHERE user_id = $1`, userID, result, errMsg)
+		log.Printf("worker: parse response for user %d: %v", userID, err)
+		return
+	}
+
+	for i := range scored.RecommendedCareers {
+		title := strings.ToLower(scored.RecommendedCareers[i].Title)
+		if id, ok := careerMap[title]; ok {
+			scored.RecommendedCareers[i].CareerID = id
+		}
+	}
+
+	scoredJSON, _ := json.Marshal(scored.RecommendedCareers)
+
+	tx, err := w.db.Beginx()
+	if err != nil {
+		w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = 'transaction error' WHERE user_id = $1`, userID)
+		return
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(
+		`UPDATE ai_results SET raw_response = $2, recommended_careers = $3, status = 'completed', completed_at = NOW() WHERE user_id = $1`,
+		userID, result, scoredJSON,
+	)
+	if err != nil {
+		log.Printf("worker: update ai_results for user %d: %v", userID, err)
+		return
+	}
+
+	for _, sc := range scored.RecommendedCareers {
+		if sc.CareerID == 0 {
+			continue
+		}
+		_, err = tx.Exec(
+			`INSERT INTO career_scores (user_id, career_id, score, reasoning) VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (user_id, career_id) DO UPDATE SET score = $3, reasoning = $4`,
+			userID, sc.CareerID, sc.Score, sc.Reasoning,
+		)
+		if err != nil {
+			log.Printf("worker: insert career_score for user %d career %d: %v", userID, sc.CareerID, err)
+			return
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("worker: commit for user %d: %v", userID, err)
+		return
+	}
+
+	log.Printf("worker: completed for user %d with %d career matches", userID, len(scored.RecommendedCareers))
+}

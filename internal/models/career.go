@@ -3,6 +3,8 @@ package models
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 type Category struct {
@@ -29,7 +31,7 @@ type Career struct {
 	Description      string          `db:"description" json:"description"`
 	CategoryID       int64           `db:"category_id" json:"category_id"`
 	DailyTasks       json.RawMessage `db:"daily_tasks" json:"daily_tasks"`
-	Skills           []string        `db:"skills" json:"skills"`
+	Skills           pq.StringArray  `db:"skills" json:"skills"`
 	SalaryMin        int             `db:"salary_min" json:"-"`
 	SalaryMax        int             `db:"salary_max" json:"-"`
 	SalaryCurrency   string          `db:"salary_currency" json:"-"`

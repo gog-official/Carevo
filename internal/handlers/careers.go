@@ -3,22 +3,36 @@ package handlers
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/guruorgoru/carevo/internal/cache"
 	"github.com/guruorgoru/carevo/internal/models"
 	"github.com/jmoiron/sqlx"
 )
 
 type CareerHandler struct {
-	db *sqlx.DB
+	db    *sqlx.DB
+	cache *cache.Store
 }
 
-func NewCareerHandler(db *sqlx.DB) *CareerHandler {
-	return &CareerHandler{db: db}
+func NewCareerHandler(db *sqlx.DB, cacheStore *cache.Store) *CareerHandler {
+	return &CareerHandler{db: db, cache: cacheStore}
 }
+
+// @Summary      List careers
+// @Tags         careers
+// @Produce      json
+// @Param        page      query  int     false  "Page number"
+// @Param        limit     query  int     false  "Items per page"
+// @Param        category  query  string  false  "Category slug"
+// @Param        tag       query  string  false  "Tag name"
+// @Success      200  {object}  map[string]any
+// @Router       /careers [get]
 
 func (h *CareerHandler) List(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -33,6 +47,15 @@ func (h *CareerHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	category := r.URL.Query().Get("category")
 	tag := r.URL.Query().Get("tag")
+
+	cacheKey := fmt.Sprintf("careers:list:page=%d:limit=%d:category=%s:tag=%s", page, limit, category, tag)
+	if h.cache != nil {
+		var cachedResp map[string]any
+		if hit, err := h.cache.Get(r.Context(), cacheKey, &cachedResp); err == nil && hit {
+			writeJSON(w, http.StatusOK, cachedResp)
+			return
+		}
+	}
 
 	where := []string{"1=1"}
 	args := []any{}
@@ -86,17 +109,39 @@ func (h *CareerHandler) List(w http.ResponseWriter, r *http.Request) {
 		resp[i] = careerResponse{Career: c, SalaryRange: c.SalaryRange(), Tags: tags}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"careers":    resp,
-		"page":       page,
-		"limit":      limit,
-		"total":      total,
+	respData := map[string]any{
+		"careers":     resp,
+		"page":        page,
+		"limit":       limit,
+		"total":       total,
 		"total_pages": (total + limit - 1) / limit,
-	})
+	}
+
+	if h.cache != nil {
+		h.cache.Set(r.Context(), cacheKey, respData, 5*time.Minute)
+	}
+
+	writeJSON(w, http.StatusOK, respData)
 }
 
+// @Summary      Get career by slug
+// @Tags         careers
+// @Produce      json
+// @Param        slug   path  string  true  "Career slug"
+// @Success      200  {object}  map[string]any
+// @Failure      404  {object}  map[string]string
+// @Router       /careers/{slug} [get]
 func (h *CareerHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
+
+	cacheKey := fmt.Sprintf("careers:slug:%s", slug)
+	if h.cache != nil {
+		var cachedResp map[string]any
+		if hit, err := h.cache.Get(r.Context(), cacheKey, &cachedResp); err == nil && hit {
+			writeJSON(w, http.StatusOK, cachedResp)
+			return
+		}
+	}
 
 	var career models.Career
 	query := `SELECT c.*, cat.name as category_name, cat.slug as category_slug
@@ -121,11 +166,26 @@ func (h *CareerHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 		Tags        []string           `json:"tags"`
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	respData := map[string]any{
 		"career": careerDetail{Career: career, SalaryRange: career.SalaryRange(), Tags: tags},
-	})
+	}
+
+	if h.cache != nil {
+		h.cache.Set(r.Context(), cacheKey, respData, 5*time.Minute)
+	}
+
+	writeJSON(w, http.StatusOK, respData)
 }
 
+// @Summary      Search careers
+// @Tags         careers
+// @Produce      json
+// @Param        q      query  string  true   "Search query"
+// @Param        page   query  int     false  "Page number"
+// @Param        limit  query  int     false  "Items per page"
+// @Success      200  {object}  map[string]any
+// @Failure      400  {object}  map[string]string
+// @Router       /careers/search [get]
 func (h *CareerHandler) Search(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
@@ -189,6 +249,11 @@ func (h *CareerHandler) Search(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// @Summary      List categories with counts
+// @Tags         categories
+// @Produce      json
+// @Success      200  {object}  map[string]any
+// @Router       /categories [get]
 func (h *CareerHandler) Categories(w http.ResponseWriter, r *http.Request) {
 	var categories []models.CategoryWithCount
 	err := h.db.Select(&categories, `
@@ -202,9 +267,20 @@ func (h *CareerHandler) Categories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if categories == nil {
+		categories = []models.CategoryWithCount{}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"categories": categories})
 }
 
+// @Summary      Get resources for a career
+// @Tags         careers
+// @Produce      json
+// @Param        id   path  int  true  "Career ID"
+// @Success      200  {object}  map[string]any
+// @Failure      400  {object}  map[string]string
+// @Router       /careers/{id}/resources [get]
 func (h *CareerHandler) Resources(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -220,9 +296,20 @@ func (h *CareerHandler) Resources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if resources == nil {
+		resources = []models.Resource{}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"resources": resources})
 }
 
+// @Summary      Get roadmap steps for a career
+// @Tags         careers
+// @Produce      json
+// @Param        id   path  int  true  "Career ID"
+// @Success      200  {object}  map[string]any
+// @Failure      400  {object}  map[string]string
+// @Router       /careers/{id}/roadmap [get]
 func (h *CareerHandler) Roadmap(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -236,6 +323,10 @@ func (h *CareerHandler) Roadmap(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
+	}
+
+	if steps == nil {
+		steps = []models.RoadmapStep{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"roadmap": steps})

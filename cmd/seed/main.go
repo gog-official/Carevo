@@ -7,6 +7,7 @@ import (
 
 	"github.com/guruorgoru/carevo/internal/config"
 	"github.com/guruorgoru/carevo/internal/database"
+	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 )
 
@@ -55,6 +56,10 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	if err := database.RunMigrations(cfg.DatabaseURL); err != nil {
+		log.Fatalf("migrations: %v", err)
 	}
 
 	db, err := database.Connect(cfg.DatabaseURL)
@@ -218,7 +223,52 @@ func main() {
 		fmt.Printf("seeded: %s\n", c.Title)
 	}
 
+	seedSurveyQuestions(db)
+
 	fmt.Println("done!")
+}
+
+func seedSurveyQuestions(db *sqlx.DB) {
+	questions := []struct {
+		SortOrder int
+		Category  string
+		Text      string
+		Options   []string
+	}{
+		{1, "personality", "Do you enjoy working with people or working alone?", []string{"I love working with people", "I prefer working alone", "I like a mix of both", "Depends on the task"}},
+		{2, "personality", "How do you prefer to solve problems?", []string{"Step by step with clear rules", "Creative experimentation", "Research and data analysis", "Ask others for advice"}},
+		{3, "personality", "What kind of work environment feels best to you?", []string{"Fast-paced and dynamic", "Quiet and focused", "Outdoors and active", "Collaborative team space"}},
+		{4, "personality", "How do you feel about routine tasks?", []string{"I like predictable routines", "I get bored with repetition", "I'm okay with some routine", "I prefer variety every day"}},
+		{5, "personality", "Are you comfortable taking risks?", []string{"Yes, I take risks easily", "No, I prefer safety", "Calculated risks only", "Only if there's no other option"}},
+		{6, "skills", "Which school subject do you enjoy most?", []string{"Math and numbers", "Science and experiments", "Language and writing", "Arts and crafts"}},
+		{7, "skills", "How are your computer skills?", []string{"I can code and build things", "I'm good with software tools", "Basic internet and email", "I prefer hands-on work"}},
+		{8, "skills", "Do you enjoy hands-on work with tools or machines?", []string{"Yes, I love fixing and building", "Sometimes, for small tasks", "Not really, I prefer desk work", "Only if needed"}},
+		{9, "skills", "How good are you at explaining things to others?", []string{"Very good — I teach naturally", "Good with some practice", "Okay but I get nervous", "I'd rather show than tell"}},
+		{10, "skills", "Are you good at organizing and planning?", []string{"Very organized", "Somewhat organized", "I prefer spontaneous", "I struggle with planning"}},
+		{11, "interests", "What type of work sounds exciting to you?", []string{"Building or creating something new", "Helping people directly", "Analyzing data and finding patterns", "Leading and managing projects"}},
+		{12, "interests", "Would you like to work in an office, outdoors, or remotely?", []string{"Office with a team", "Outdoors and traveling", "Remote from home", "Anywhere is fine"}},
+		{13, "interests", "Which industry interests you most?", []string{"Technology and IT", "Healthcare and wellness", "Business and finance", "Creative arts and media"}},
+		{14, "interests", "Do you see yourself starting your own business one day?", []string{"Yes, definitely", "Maybe, if the right idea comes", "No, I prefer stable jobs", "I'd rather freelance"}},
+		{15, "interests", "What motivates you most in a career?", []string{"High salary and benefits", "Helping society and people", "Creative expression", "Job security and stability"}},
+		{16, "work_style", "Can you handle high-stress situations?", []string{"Yes, I stay calm under pressure", "I manage but it affects me", "I prefer low-stress work", "Only in short bursts"}},
+		{17, "work_style", "How important is work-life balance to you?", []string{"Very important — I need free time", "Important but I'll work hard", "I don't mind long hours for good pay", "It depends on the stage of life"}},
+		{18, "work_style", "Do you like leading teams and making decisions?", []string{"Yes, I'm a natural leader", "Sometimes, if needed", "No, I prefer following", "Only in small groups"}},
+		{19, "work_style", "How do you feel about continuing education and learning?", []string{"I love learning new things", "I'll learn if required for my job", "I prefer one-time training", "I'd rather stick to what I know"}},
+		{20, "work_style", "Would you prefer a job that lets you travel?", []string{"Yes, travel is important to me", "Occasional travel is fine", "No, I want to stay local", "Remote work is better than travel"}},
+	}
+
+	for _, q := range questions {
+		optsJSON, _ := json.Marshal(q.Options)
+		_, err := db.Exec(
+			`INSERT INTO survey_questions (category, question_text, options, sort_order) VALUES ($1, $2, $3, $4)
+			 ON CONFLICT DO NOTHING`,
+			q.Category, q.Text, optsJSON, q.SortOrder,
+		)
+		if err != nil {
+			log.Printf("seed survey question %d: %v", q.SortOrder, err)
+		}
+	}
+	fmt.Printf("seeded survey questions: %d\n", len(questions))
 }
 
 func softwareEngineer() careerSeed {

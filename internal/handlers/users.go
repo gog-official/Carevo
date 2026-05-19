@@ -17,6 +17,13 @@ func NewUserHandler(db *sqlx.DB) *UserHandler {
 	return &UserHandler{db: db}
 }
 
+// @Summary      Get current user profile
+// @Tags         users
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]any
+// @Failure      401  {object}  map[string]string
+// @Router       /users/me [get]
 func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.UserFromCtx(r.Context())
 	if claims == nil {
@@ -33,6 +40,15 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
 }
 
+// @Summary      Update current user profile
+// @Tags         users
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body  models.UpdateProfileRequest  true  "Profile fields"
+// @Success      200  {object}  map[string]any
+// @Failure      401  {object}  map[string]string
+// @Router       /users/me [put]
 func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.UserFromCtx(r.Context())
 	if claims == nil {
