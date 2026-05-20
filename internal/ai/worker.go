@@ -105,9 +105,11 @@ func (w *Worker) process(ctx context.Context, userID int64) {
 
 	var careerNames []string
 	careerMap := make(map[string]int64)
+	careerTitles := make(map[int64]string)
 	for _, c := range careers {
 		careerNames = append(careerNames, fmt.Sprintf("%s (slug: %s)", c.Title, c.Slug))
 		careerMap[strings.ToLower(c.Title)] = c.ID
+		careerTitles[c.ID] = c.Title
 	}
 
 	systemPrompt := `You are a career counselor for Nepal. Your job is to match users to careers based on their survey answers.
@@ -116,7 +118,7 @@ Return ONLY valid JSON with this exact structure:
 {
   "recommended_careers": [
     {
-      "career_title": "Exact Career Title",
+      "title": "Exact Career Title",
       "score": 85,
       "reasoning": "2-3 sentence explanation why this career fits"
     }
@@ -126,7 +128,7 @@ Return ONLY valid JSON with this exact structure:
 Rules:
 - Score must be 0-100
 - Return 5-10 career matches sorted by score descending
-- Only use career titles from the provided list
+- Use the EXACT career title from the provided list — copy it character for character
 - Be realistic about Nepal job market conditions
 - Consider education requirements, skills, and local demand`
 
@@ -155,9 +157,18 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 	}
 
 	for i := range scored.RecommendedCareers {
-		title := strings.ToLower(scored.RecommendedCareers[i].Title)
+		title := strings.TrimSpace(strings.ToLower(scored.RecommendedCareers[i].Title))
 		if id, ok := careerMap[title]; ok {
 			scored.RecommendedCareers[i].CareerID = id
+			scored.RecommendedCareers[i].Title = careerTitles[id]
+			continue
+		}
+		for dbTitle, id := range careerMap {
+			if strings.Contains(dbTitle, title) || strings.Contains(title, dbTitle) {
+				scored.RecommendedCareers[i].CareerID = id
+				scored.RecommendedCareers[i].Title = careerTitles[id]
+				break
+			}
 		}
 	}
 
