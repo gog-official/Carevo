@@ -20,6 +20,7 @@ RUN adduser -D -u 1000 user && \
 WORKDIR /app
 
 COPY --from=builder --chown=user /app/server /app/server
+COPY --from=builder --chown=user /app/seed /app/seed
 COPY --from=builder --chown=user /app/migrations /app/migrations
 
 USER user
