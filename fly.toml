@@ -7,6 +7,8 @@ app = 'carevo'
 primary_region = 'sin'
 
 [build]
+  dockerfile = "Dockerfile"
+  build-target = "api"
 
 [http_service]
   internal_port = 8080
