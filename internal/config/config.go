@@ -16,6 +16,10 @@ type Config struct {
 	RedisURL          string
 	GeminiAPIKey      string
 	GeminiModel       string
+	AnthropicAPIKey   string
+	AnthropicModel    string
+	HuggingFaceAPIKey string
+	HuggingFaceModel  string
 }
 
 func Load() (*Config, error) {
@@ -50,6 +54,10 @@ func Load() (*Config, error) {
 		RedisURL:          getEnv("REDIS_URL", "localhost:6379"),
 		GeminiAPIKey:      getEnv("GEMINI_API_KEY", ""),
 		GeminiModel:       getEnv("GEMINI_MODEL", "gemini-2.0-flash"),
+		AnthropicAPIKey:   getEnv("ANTHROPIC_API_KEY", ""),
+		AnthropicModel:    getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+		HuggingFaceAPIKey: getEnv("HUGGINGFACE_API_KEY", ""),
+		HuggingFaceModel:  getEnv("HUGGINGFACE_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
 	}, nil
 }
 

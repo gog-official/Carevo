@@ -15,7 +15,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func New(db *sqlx.DB, jwtService *auth.JWTService, cacheStore *cache.Store, aiWorker *ai.Worker, aiProvider *ai.GeminiProvider) *chi.Mux {
+func New(db *sqlx.DB, jwtService *auth.JWTService, cacheStore *cache.Store, aiWorker *ai.Worker, aiProvider ai.Provider) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(chimw.Logger)
@@ -76,7 +76,7 @@ func New(db *sqlx.DB, jwtService *auth.JWTService, cacheStore *cache.Store, aiWo
 		r.Get("/results/me/roadmap", aiH.GetRoadmap)
 		r.Get("/careers/{id}/score", aiH.GetCareerScore)
 
-		r.With(middleware.NewRateLimiter(10, time.Minute).Middleware).Post("/chat", aiH.ChatStream)
+		r.With(middleware.NewRateLimiter(5, time.Minute).Middleware).Post("/chat", aiH.ChatStream)
 	})
 
 	r.Get("/health", healthH.Check)

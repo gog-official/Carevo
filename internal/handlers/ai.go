@@ -19,10 +19,10 @@ import (
 type AIHandler struct {
 	db       *sqlx.DB
 	worker   *ai.Worker
-	provider *ai.GeminiProvider
+	provider ai.Provider
 }
 
-func NewAIHandler(db *sqlx.DB, worker *ai.Worker, provider *ai.GeminiProvider) *AIHandler {
+func NewAIHandler(db *sqlx.DB, worker *ai.Worker, provider ai.Provider) *AIHandler {
 	return &AIHandler{db: db, worker: worker, provider: provider}
 }
 

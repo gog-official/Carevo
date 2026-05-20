@@ -47,8 +47,12 @@ func main() {
 	cacheStore := cache.New(cfg.RedisURL)
 	defer cacheStore.Close()
 
-	var aiProvider *ai.GeminiProvider
-	if cfg.GeminiAPIKey != "" {
+	var aiProvider ai.Provider
+	if cfg.HuggingFaceAPIKey != "" {
+		aiProvider = ai.NewHuggingFaceProvider(cfg.HuggingFaceAPIKey, cfg.HuggingFaceModel)
+	} else if cfg.AnthropicAPIKey != "" {
+		aiProvider = ai.NewAnthropicProvider(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	} else if cfg.GeminiAPIKey != "" {
 		aiProvider = ai.NewGeminiProvider(cfg.GeminiAPIKey, cfg.GeminiModel)
 	}
 	aiWorker := ai.NewWorker(db, aiProvider)

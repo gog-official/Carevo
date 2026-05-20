@@ -13,11 +13,11 @@ import (
 
 type Worker struct {
 	db       *sqlx.DB
-	provider *GeminiProvider
+	provider Provider
 	jobs     chan int64
 }
 
-func NewWorker(db *sqlx.DB, provider *GeminiProvider) *Worker {
+func NewWorker(db *sqlx.DB, provider Provider) *Worker {
 	return &Worker{
 		db:       db,
 		provider: provider,

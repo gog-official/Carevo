@@ -11,6 +11,11 @@ import (
 	"strings"
 )
 
+type Provider interface {
+	GenerateJSON(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+	GenerateStream(ctx context.Context, systemPrompt, userPrompt string, onToken func(string)) error
+}
+
 type GeminiProvider struct {
 	apiKey string
 	model  string
