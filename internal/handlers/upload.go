@@ -82,14 +82,15 @@ func (h *UploadHandler) uploadToCloudinary(file multipart.File, publicID string)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
+	ts := fmt.Sprintf("%d", time.Now().Unix())
 
 	writer.WriteField("public_id", publicID)
 	writer.WriteField("api_key", h.cloudinaryKey)
-	writer.WriteField("timestamp", fmt.Sprintf("%d", time.Now().Unix()))
+	writer.WriteField("timestamp", ts)
 
 	params := map[string]string{
 		"public_id": publicID,
-		"timestamp": fmt.Sprintf("%d", time.Now().Unix()),
+		"timestamp": ts,
 	}
 	signature := h.cloudinarySignature(params)
 	writer.WriteField("signature", signature)
@@ -132,9 +133,8 @@ func (h *UploadHandler) cloudinarySignature(params map[string]string) string {
 	for _, k := range keys {
 		parts = append(parts, k+"="+params[k])
 	}
-	parts = append(parts, h.cloudinarySecret)
 
-	input := strings.Join(parts, "&")
+	input := strings.Join(parts, "&") + h.cloudinarySecret
 	hsh := sha1.Sum([]byte(input))
 	return hex.EncodeToString(hsh[:])
 }
