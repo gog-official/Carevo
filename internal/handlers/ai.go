@@ -14,6 +14,7 @@ import (
 	"github.com/guruorgoru/carevo/internal/middleware"
 	"github.com/guruorgoru/carevo/internal/models"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 )
 
 type AIHandler struct {
@@ -342,6 +343,89 @@ Guidelines:
 - If asked something outside career guidance, gently redirect
 
 Respond in a conversational, mentor-like tone.`, career.Title, career.Title, career.Description)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	err = h.provider.GenerateStream(r.Context(), systemPrompt, req.Message, func(token string) {
+		cleaned := strings.ReplaceAll(token, "\n", "\\n")
+		chunk := models.AIMentorChunk{Token: cleaned}
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	})
+	if err != nil {
+		fmt.Fprintf(w, "data: {\"token\": \"[error: %s]\"}\n\n", err.Error())
+		flusher.Flush()
+	}
+
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+func (h *AIHandler) CareerChat(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if slug == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slug is required"})
+		return
+	}
+
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.Message == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
+		return
+	}
+
+	var career struct {
+		ID          int64          `db:"id"`
+		Title       string         `db:"title"`
+		Description string         `db:"description"`
+		Skills      pq.StringArray `db:"skills"`
+		Summary     string         `db:"summary"`
+	}
+	err := h.db.Get(&career, `SELECT id, title, description, skills, summary FROM careers WHERE slug = $1`, slug)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "career not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	skillsStr := strings.Join(career.Skills, ", ")
+	systemPrompt := fmt.Sprintf(`You are a friendly career mentor helping someone explore the "%s" career in Nepal.
+
+Career context:
+- Title: %s
+- Description: %s
+- Skills: %s
+- Summary: %s
+
+Guidelines:
+- Be encouraging and practical
+- Give Nepal-specific advice (local exams, institutes, job market)
+- Keep answers concise (2-3 paragraphs)
+- Don't make up specific salary figures
+- If asked something outside career guidance, gently redirect
+
+Respond in a conversational, mentor-like tone.`, career.Title, career.Title, career.Description, skillsStr, career.Summary)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {

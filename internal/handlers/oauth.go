@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/guruorgoru/carevo/internal/auth"
 	"github.com/guruorgoru/carevo/internal/middleware"
@@ -136,7 +137,7 @@ func (h *OAuthHandler) issueTokenPairOAuth(userID int64, email string) (*models.
 
 	_, err = h.db.Exec(
 		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
-		userID, hashed, h.jwtService.RefreshTokenTTL(),
+		userID, hashed, time.Now().Add(h.jwtService.RefreshTokenTTL()),
 	)
 	if err != nil {
 		return nil, err
