@@ -4,17 +4,19 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/guruorgoru/carevo/internal/email"
 	"github.com/guruorgoru/carevo/internal/middleware"
 	"github.com/guruorgoru/carevo/internal/models"
 	"github.com/jmoiron/sqlx"
 )
 
 type AdminHandler struct {
-	db *sqlx.DB
+	db     *sqlx.DB
+	mailer *email.Sender
 }
 
-func NewAdminHandler(db *sqlx.DB) *AdminHandler {
-	return &AdminHandler{db: db}
+func NewAdminHandler(db *sqlx.DB, mailer *email.Sender) *AdminHandler {
+	return &AdminHandler{db: db, mailer: mailer}
 }
 
 func (h *AdminHandler) RequireAdmin(next http.Handler) http.Handler {
@@ -84,10 +86,30 @@ func (h *AdminHandler) UpdateSuggestionStatus(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	_, err := h.db.Exec(`UPDATE career_suggestions SET status = $1 WHERE id = $2`, req.Status, id)
+	var suggestion struct {
+		Title    string `db:"title"`
+		UserID   int64  `db:"user_id"`
+		UserEmail string `db:"user_email"`
+	}
+	err := h.db.Get(&suggestion,
+		`SELECT cs.title, cs.user_id, u.email as user_email FROM career_suggestions cs JOIN users u ON u.id = cs.user_id WHERE cs.id = $1`, id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "suggestion not found"})
+		return
+	}
+
+	_, err = h.db.Exec(`UPDATE career_suggestions SET status = $1 WHERE id = $2`, req.Status, id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update suggestion"})
 		return
+	}
+
+	if h.mailer != nil {
+		if req.Status == "approved" {
+			h.mailer.SendSuggestionApproved(suggestion.UserEmail, suggestion.Title)
+		} else if req.Status == "rejected" {
+			h.mailer.SendSuggestionRejected(suggestion.UserEmail, suggestion.Title)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": req.Status})

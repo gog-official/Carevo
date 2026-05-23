@@ -22,6 +22,7 @@ import (
 	"github.com/guruorgoru/carevo/internal/cache"
 	"github.com/guruorgoru/carevo/internal/config"
 	"github.com/guruorgoru/carevo/internal/database"
+	"github.com/guruorgoru/carevo/internal/email"
 	"github.com/guruorgoru/carevo/internal/router"
 )
 
@@ -58,6 +59,8 @@ func main() {
 	aiWorker := ai.NewWorker(db, aiProvider)
 	aiWorker.Start(context.Background())
 
+	mailer := email.NewSender(cfg.SMTPFrom, cfg.SMTPPassword)
+
 	deps := router.Dependencies{
 		DB:               db,
 		JWTService:       jwtService,
@@ -68,6 +71,7 @@ func main() {
 		CloudinaryCloud:  cfg.CloudinaryCloud,
 		CloudinaryKey:    cfg.CloudinaryKey,
 		CloudinarySecret: cfg.CloudinarySecret,
+		Mailer:           mailer,
 	}
 
 	r := router.New(deps)

@@ -11,6 +11,7 @@ import (
 	"github.com/guruorgoru/carevo/internal/ai"
 	"github.com/guruorgoru/carevo/internal/auth"
 	"github.com/guruorgoru/carevo/internal/cache"
+	"github.com/guruorgoru/carevo/internal/email"
 	"github.com/guruorgoru/carevo/internal/handlers"
 	"github.com/guruorgoru/carevo/internal/middleware"
 	"github.com/jmoiron/sqlx"
@@ -26,6 +27,7 @@ type Dependencies struct {
 	CloudinaryCloud  string
 	CloudinaryKey    string
 	CloudinarySecret string
+	Mailer           *email.Sender
 }
 
 func New(deps Dependencies) *chi.Mux {
@@ -45,21 +47,25 @@ func New(deps Dependencies) *chi.Mux {
 	r.Use(chimw.RealIP)
 	r.Use(chimw.Heartbeat("/ping"))
 
-	authH := handlers.NewAuthHandler(deps.DB, deps.JWTService)
+	authH := handlers.NewAuthHandler(deps.DB, deps.JWTService, deps.Mailer)
 	oauthH := handlers.NewOAuthHandler(deps.DB, deps.JWTService)
 	careerH := handlers.NewCareerHandler(deps.DB, deps.CacheStore)
 	featureH := handlers.NewFeatureHandler(deps.DB, deps.CacheStore)
 	aiH := handlers.NewAIHandler(deps.DB, deps.AIWorker, deps.AIProvider)
 	healthH := handlers.NewHealthHandler(deps.DB)
 	uploadH := handlers.NewUploadHandler(deps.DB, deps.CloudinaryCloud, deps.CloudinaryKey, deps.CloudinarySecret)
-	adminH := handlers.NewAdminHandler(deps.DB)
+	adminH := handlers.NewAdminHandler(deps.DB, deps.Mailer)
 	suggestionH := handlers.NewSuggestionHandler(deps.DB)
+	verifyH := handlers.NewVerifyHandler(deps.DB, deps.Mailer)
 
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/register", authH.Register)
 		r.Post("/login", authH.Login)
 		r.Post("/refresh", authH.Refresh)
 		r.Post("/oauth", oauthH.Login)
+		r.Post("/verify-send", verifyH.SendCode)
+		r.Post("/verify", verifyH.Verify)
+		r.Post("/resend-code", verifyH.SendCode)
 	})
 
 	r.Route("/users", func(r chi.Router) {

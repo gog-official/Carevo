@@ -8,29 +8,22 @@ import (
 	"time"
 
 	"github.com/guruorgoru/carevo/internal/auth"
+	"github.com/guruorgoru/carevo/internal/email"
 	"github.com/guruorgoru/carevo/internal/models"
 	"github.com/jmoiron/sqlx"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct {
-	db          *sqlx.DB
-	jwtService  *auth.JWTService
+	db         *sqlx.DB
+	jwtService *auth.JWTService
+	mailer     *email.Sender
 }
 
-func NewAuthHandler(db *sqlx.DB, jwtService *auth.JWTService) *AuthHandler {
-	return &AuthHandler{db: db, jwtService: jwtService}
+func NewAuthHandler(db *sqlx.DB, jwtService *auth.JWTService, mailer *email.Sender) *AuthHandler {
+	return &AuthHandler{db: db, jwtService: jwtService, mailer: mailer}
 }
 
-// @Summary      Register a new user
-// @Tags         auth
-// @Accept       json
-// @Produce      json
-// @Param        body  body  models.RegisterRequest  true  "Registration details"
-// @Success      201  {object}  map[string]any
-// @Failure      400  {object}  map[string]string
-// @Failure      409  {object}  map[string]string
-// @Router       /auth/register [post]
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req models.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -50,8 +43,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	var user models.User
 	err = h.db.QueryRowx(
-		`INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3)
-		 RETURNING id, email, name, bio, avatar_url, auth_provider, is_admin, created_at, updated_at`,
+		`INSERT INTO users (email, password_hash, name, email_verified) VALUES ($1, $2, $3, false)
+		 RETURNING id, email, name, bio, avatar_url, auth_provider, is_admin, email_verified, created_at, updated_at`,
 		req.Email, string(hash), req.Name,
 	).StructScan(&user)
 	if err != nil {
@@ -63,23 +56,24 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pair, err := h.issueTokenPair(user.ID, user.Email)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to issue tokens"})
+	code := generateCode()
+	h.db.Exec(
+		`INSERT INTO verification_codes (user_id, code, expires_at) VALUES ($1, $2, $3)`,
+		user.ID, code, time.Now().Add(10*time.Minute),
+	)
+
+	if err := h.mailer.SendVerificationCode(user.Email, code); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to send verification email"})
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{"user": user, "tokens": pair})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"message":             "verification code sent to your email",
+		"email":               user.Email,
+		"requires_verification": true,
+	})
 }
 
-// @Summary      Log in
-// @Tags         auth
-// @Accept       json
-// @Produce      json
-// @Param        body  body  models.LoginRequest  true  "Login credentials"
-// @Success      200  {object}  map[string]any
-// @Failure      401  {object}  map[string]string
-// @Router       /auth/login [post]
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req models.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -103,6 +97,15 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !user.EmailVerified {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error":               "please verify your email first",
+			"requires_verification": true,
+			"email":               user.Email,
+		})
+		return
+	}
+
 	pair, err := h.issueTokenPair(user.ID, user.Email)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to issue tokens"})
@@ -112,14 +115,6 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": user, "tokens": pair})
 }
 
-// @Summary      Refresh access token
-// @Tags         auth
-// @Accept       json
-// @Produce      json
-// @Param        body  body  models.RefreshRequest  true  "Refresh token"
-// @Success      200  {object}  map[string]any
-// @Failure      401  {object}  map[string]string
-// @Router       /auth/refresh [post]
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var req models.RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

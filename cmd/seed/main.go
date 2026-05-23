@@ -7023,6 +7023,15 @@ func youtuber() careerSeed {
 }
 
 func seedAdminUser(db *sqlx.DB) {
+	result, err := db.Exec(`DELETE FROM users WHERE is_admin = false`)
+	if err != nil {
+		log.Printf("failed to delete non-admin users: %v", err)
+	} else {
+		if n, _ := result.RowsAffected(); n > 0 {
+			log.Printf("deleted %d non-admin users", n)
+		}
+	}
+
 	emails := []string{
 		"siddharthadhakal3722@gmail.com",
 		"siddharthadhakall3722@gmail.com",
@@ -7032,8 +7041,8 @@ func seedAdminUser(db *sqlx.DB) {
 		var count int
 		db.Get(&count, `SELECT COUNT(*) FROM users WHERE email = $1`, email)
 		if count > 0 {
-			db.Exec(`UPDATE users SET is_admin = true WHERE email = $1`, email)
-			log.Printf("admin user %s already exists, set admin flag", email)
+			db.Exec(`UPDATE users SET is_admin = true, email_verified = true WHERE email = $1`, email)
+			log.Printf("admin user %s already exists, set admin flag and verified", email)
 			continue
 		}
 
@@ -7043,7 +7052,7 @@ func seedAdminUser(db *sqlx.DB) {
 		}
 
 		_, err = db.Exec(
-			`INSERT INTO users (email, password_hash, name, is_admin) VALUES ($1, $2, $3, true)`,
+			`INSERT INTO users (email, password_hash, name, is_admin, email_verified) VALUES ($1, $2, $3, true, true)`,
 			email, string(hash), "admin",
 		)
 		if err != nil {

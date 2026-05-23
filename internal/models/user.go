@@ -12,6 +12,7 @@ type User struct {
 	AuthProvider   string      `db:"auth_provider" json:"auth_provider"`
 	AuthProviderID *string     `db:"auth_provider_id" json:"-"`
 	IsAdmin        bool        `db:"is_admin" json:"is_admin"`
+	EmailVerified  bool        `db:"email_verified" json:"email_verified"`
 	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt      time.Time  `db:"updated_at" json:"updated_at"`
 }

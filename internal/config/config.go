@@ -25,6 +25,8 @@ type Config struct {
 	CloudinaryKey     string
 	CloudinarySecret  string
 	AdminEmail        string
+	SMTPFrom          string
+	SMTPPassword      string
 }
 
 func Load() (*Config, error) {
@@ -68,6 +70,8 @@ func Load() (*Config, error) {
 		CloudinaryKey:     getEnv("CLOUDINARY_KEY", ""),
 		CloudinarySecret:  getEnv("CLOUDINARY_SECRET", ""),
 		AdminEmail:        getEnv("ADMIN_EMAIL", "siddharthadhakal3722@gmail.com"),
+		SMTPFrom:          getEnv("SMTP_FROM", "siddharthadhakal3722@gmail.com"),
+		SMTPPassword:      getEnv("SMTP_PASSWORD", ""),
 	}, nil
 }
 
