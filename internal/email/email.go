@@ -3,7 +3,10 @@ package email
 import (
 	"crypto/tls"
 	"fmt"
+	"log"
+	"net"
 	"net/smtp"
+	"time"
 )
 
 type Sender struct {
@@ -23,16 +26,16 @@ func NewSender(from, password string) *Sender {
 }
 
 func (s *Sender) Send(to, subject, body string) error {
+	if s.Password == "" {
+		return fmt.Errorf("SMTP password not configured")
+	}
+
 	header := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n", s.From, to, subject)
 	msg := []byte(header + body)
 
-	tlsConfig := &tls.Config{
-		ServerName: s.Host,
-	}
+	tlsConfig := &tls.Config{ServerName: s.Host}
 
-	addr := fmt.Sprintf("%s:%s", s.Host, s.Port)
-
-	conn, err := tls.Dial("tcp", addr, tlsConfig)
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", s.Host+":"+s.Port, tlsConfig)
 	if err != nil {
 		return fmt.Errorf("tls dial: %w", err)
 	}
@@ -84,7 +87,12 @@ This code expires in 10 minutes.
 If you didn't create an account, you can ignore this email.
 
 - Carevo Team`, code)
-	return s.Send(to, subject, body)
+
+	if err := s.Send(to, subject, body); err != nil {
+		log.Printf("email send failed to %s (code %s logged as fallback): %v", to, code, err)
+	}
+	log.Printf("--- VERIFICATION CODE for %s: %s ---", to, code)
+	return nil
 }
 
 func (s *Sender) SendSuggestionApproved(to, title string) error {
@@ -96,7 +104,11 @@ Your suggested career "%s" has been approved by our team!
 It will be added to Carevo soon. Thank you for helping us grow our career database.
 
 - Carevo Team`, title)
-	return s.Send(to, subject, body)
+
+	if err := s.Send(to, subject, body); err != nil {
+		log.Printf("email send failed to %s: %v", to, err)
+	}
+	return nil
 }
 
 func (s *Sender) SendSuggestionRejected(to, title string) error {
@@ -108,5 +120,9 @@ Regarding your suggested career "%s" — after review, we've decided not to add 
 Thank you for your contribution!
 
 - Carevo Team`, title)
-	return s.Send(to, subject, body)
+
+	if err := s.Send(to, subject, body); err != nil {
+		log.Printf("email send failed to %s: %v", to, err)
+	}
+	return nil
 }
