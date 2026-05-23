@@ -1,0 +1,25 @@
+DROP TABLE IF EXISTS career_sources;
+DROP TABLE IF EXISTS career_comparisons;
+DROP TABLE IF EXISTS user_mode_preferences;
+DROP TABLE IF EXISTS user_job_applications;
+DROP TABLE IF EXISTS user_study_streaks;
+DROP TABLE IF EXISTS user_milestones;
+DROP TABLE IF EXISTS user_goals;
+DROP TABLE IF EXISTS user_certifications;
+DROP TABLE IF EXISTS user_skills;
+
+ALTER TABLE careers DROP COLUMN IF EXISTS career_metadata;
+ALTER TABLE careers DROP COLUMN IF EXISTS ne_content;
+ALTER TABLE careers DROP COLUMN IF EXISTS source_labels;
+ALTER TABLE careers DROP COLUMN IF EXISTS demand_data;
+ALTER TABLE careers DROP COLUMN IF EXISTS city_salaries;
+ALTER TABLE careers DROP COLUMN IF EXISTS salary_tiers;
+ALTER TABLE careers DROP COLUMN IF EXISTS work_life_balance;
+ALTER TABLE careers DROP COLUMN IF EXISTS study_duration;
+ALTER TABLE careers DROP COLUMN IF EXISTS degree_required;
+ALTER TABLE careers DROP COLUMN IF EXISTS creative_score;
+ALTER TABLE careers DROP COLUMN IF EXISTS technical_score;
+ALTER TABLE careers DROP COLUMN IF EXISTS freelance_potential;
+ALTER TABLE careers DROP COLUMN IF EXISTS is_government;
+ALTER TABLE careers DROP COLUMN IF EXISTS is_remote_ok;
+ALTER TABLE careers DROP COLUMN IF EXISTS exam_required;

@@ -58,7 +58,19 @@ func main() {
 	aiWorker := ai.NewWorker(db, aiProvider)
 	aiWorker.Start(context.Background())
 
-	r := router.New(db, jwtService, cacheStore, aiWorker, aiProvider)
+	deps := router.Dependencies{
+		DB:               db,
+		JWTService:       jwtService,
+		CacheStore:       cacheStore,
+		AIWorker:         aiWorker,
+		AIProvider:       aiProvider,
+		FrontendURL:      cfg.FrontendURL,
+		CloudinaryCloud:  cfg.CloudinaryCloud,
+		CloudinaryKey:    cfg.CloudinaryKey,
+		CloudinarySecret: cfg.CloudinarySecret,
+	}
+
+	r := router.New(deps)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("listening on %s", addr)

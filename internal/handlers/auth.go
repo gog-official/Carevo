@@ -51,7 +51,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var user models.User
 	err = h.db.QueryRowx(
 		`INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3)
-		 RETURNING id, email, name, bio, avatar_url, created_at, updated_at`,
+		 RETURNING id, email, name, bio, avatar_url, auth_provider, is_admin, created_at, updated_at`,
 		req.Email, string(hash), req.Name,
 	).StructScan(&user)
 	if err != nil {

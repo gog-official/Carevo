@@ -69,7 +69,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		                   avatar_url = COALESCE(NULLIF($3, ''), avatar_url),
 		                   updated_at = NOW()
 		 WHERE id = $4
-		 RETURNING id, email, name, bio, avatar_url, created_at, updated_at`,
+		 RETURNING id, email, name, bio, avatar_url, auth_provider, is_admin, created_at, updated_at`,
 		req.Name, req.Bio, req.AvatarURL, claims.UserID,
 	).StructScan(&user)
 	if err != nil {

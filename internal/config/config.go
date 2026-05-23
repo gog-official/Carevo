@@ -20,6 +20,11 @@ type Config struct {
 	AnthropicModel    string
 	HuggingFaceAPIKey string
 	HuggingFaceModel  string
+	FrontendURL       string
+	CloudinaryCloud   string
+	CloudinaryKey     string
+	CloudinarySecret  string
+	AdminEmail        string
 }
 
 func Load() (*Config, error) {
@@ -58,6 +63,11 @@ func Load() (*Config, error) {
 		AnthropicModel:    getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
 		HuggingFaceAPIKey: getEnv("HUGGINGFACE_API_KEY", ""),
 		HuggingFaceModel:  getEnv("HUGGINGFACE_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
+		FrontendURL:       getEnv("FRONTEND_URL", "http://localhost:3000"),
+		CloudinaryCloud:   getEnv("CLOUDINARY_CLOUD", ""),
+		CloudinaryKey:     getEnv("CLOUDINARY_KEY", ""),
+		CloudinarySecret:  getEnv("CLOUDINARY_SECRET", ""),
+		AdminEmail:        getEnv("ADMIN_EMAIL", "siddharthadhakal3722@gmail.com"),
 	}, nil
 }
 

@@ -39,6 +39,10 @@ services:
       JWT_ACCESS_TTL: 15m
       JWT_REFRESH_TTL: 720h
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      CLOUDINARY_CLOUD: ${CLOUDINARY_CLOUD:-}
+      CLOUDINARY_KEY: ${CLOUDINARY_KEY:-}
+      CLOUDINARY_SECRET: ${CLOUDINARY_SECRET:-}
+      FRONTEND_URL: http://localhost:3000
       PORT: 8080
     depends_on:
       db:

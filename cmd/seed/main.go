@@ -9,28 +9,46 @@ import (
 	"github.com/guruorgoru/carevo/internal/database"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type careerSeed struct {
-	CategoryName    string
-	CategorySlug    string
-	CategoryDesc    string
-	CategoryIcon    string
-	Title           string
-	Slug            string
-	Summary         string
-	Description     string
-	DailyTasks      []string
-	Skills          []string
-	SalaryMin       int
-	SalaryMax       int
-	Difficulty      int
-	FutureProof     int
-	EducationReq    string
-	Outlook         string
-	Tags            []string
-	Resources       []resourceSeed
-	RoadmapSteps    []roadmapSeed
+	CategoryName     string
+	CategorySlug     string
+	CategoryDesc     string
+	CategoryIcon     string
+	Title            string
+	Slug             string
+	Summary          string
+	Description      string
+	DailyTasks       []string
+	Skills           []string
+	SalaryMin        int
+	SalaryMax        int
+	SalaryCurrency   string
+	SalaryPeriod     string
+	Difficulty       int
+	FutureProof      int
+	EducationReq     string
+	Outlook          string
+	Tags             []string
+	Resources        []resourceSeed
+	RoadmapSteps     []roadmapSeed
+	WorkLifeBalance  int
+	StudyDuration    string
+	DegreeRequired   string
+	CreativeScore    int
+	TechnicalScore   int
+	FreelancePot     int
+	IsGovernment     bool
+	IsRemoteOK       bool
+	ExamRequired     string
+	SalaryTiersJSON  string
+	CitySalariesJSON string
+	DemandDataJSON   string
+	SourceLabelsJSON string
+	NepaliContentJSON string
+	MetadataJSON     string
 }
 
 type resourceSeed struct {
@@ -165,7 +183,16 @@ func main() {
 		cateringService(),
 		pashminaBusiness(),
 		carpetManufacturer(),
+		govtSchoolTeacher(),
+		youtuber(),
 	}
+
+	log.Printf("Seeding %d base careers...", len(careers))
+
+	// Add bulk-generated careers
+	bulkCareers := bulkCareers()
+	log.Printf("Adding %d bulk careers...", len(bulkCareers))
+	careers = append(careers, bulkCareers...)
 
 	for _, c := range careers {
 		// category
@@ -184,23 +211,118 @@ func main() {
 		tasksJSON, _ := json.Marshal(c.DailyTasks)
 		skills := pq.StringArray(c.Skills)
 
-		var careerID int64
-		err = db.QueryRow(
-			`INSERT INTO careers (title, slug, summary, description, category_id, daily_tasks, skills,
-				salary_min, salary_max, salary_currency, salary_period, difficulty, future_proof_score,
-				education_required, outlook)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-			ON CONFLICT (slug) DO UPDATE SET
-				title=EXCLUDED.title, summary=EXCLUDED.summary, description=EXCLUDED.description,
-				category_id=EXCLUDED.category_id, daily_tasks=EXCLUDED.daily_tasks, skills=EXCLUDED.skills,
-				salary_min=EXCLUDED.salary_min, salary_max=EXCLUDED.salary_max,
-				difficulty=EXCLUDED.difficulty, future_proof_score=EXCLUDED.future_proof_score,
-				education_required=EXCLUDED.education_required, outlook=EXCLUDED.outlook
-			RETURNING id`,
-			c.Title, c.Slug, c.Summary, c.Description, catID, tasksJSON, skills,
-			c.SalaryMin, c.SalaryMax, "USD", "yearly", c.Difficulty, c.FutureProof,
-			c.EducationReq, c.Outlook,
-		).Scan(&careerID)
+		curr := c.SalaryCurrency
+	period := c.SalaryPeriod
+	if curr == "" {
+		// Old functions had USD salaries - scale down to Nepal NPR reality
+		curr = "NPR"
+		period = "monthly"
+		salMin := c.SalaryMin * 2 / 5
+		salMax := c.SalaryMax * 2 / 5
+		if salMin < 5000 {
+			salMin = 5000
+		}
+		if salMax < salMin {
+			salMax = salMin + 15000
+		}
+		c.SalaryMin = salMin
+		c.SalaryMax = salMax
+	} else if period == "" {
+		period = "monthly"
+	}
+
+	// Build default salary_tiers if not provided
+	salaryTiers := c.SalaryTiersJSON
+	if salaryTiers == "" {
+		entryMin := c.SalaryMin / 2
+		entryMax := c.SalaryMin
+		avgMin := c.SalaryMin
+		avgMax := c.SalaryMax
+		expMin := c.SalaryMax
+		expMax := c.SalaryMax * 15 / 10
+		freelanceMin := avgMin
+		freelanceMax := expMax
+		salaryTiers = fmt.Sprintf(`{"entry":{"min":%d,"max":%d,"currency":"%s","period":"%s"},"average":{"min":%d,"max":%d,"currency":"%s","period":"%s"},"experienced":{"min":%d,"max":%d,"currency":"%s","period":"%s"},"freelance":{"min":%d,"max":%d,"currency":"%s","period":"%s"}}`,
+			entryMin, entryMax, curr, period,
+			avgMin, avgMax, curr, period,
+			expMin, expMax, curr, period,
+			freelanceMin, freelanceMax, curr, period)
+	}
+
+	citySalaries := c.CitySalariesJSON
+	if citySalaries == "" {
+		citySalaries = "{}"
+	}
+
+	neContent := c.NepaliContentJSON
+	if neContent == "" {
+		neContent = "{}"
+	}
+
+	demandData := c.DemandDataJSON
+	if demandData == "" {
+		demandData = `{"trend":"growing","growth_forecast":"stable","opportunities":"moderate","global_opportunity":false,"nepal_demand":"growing"}`
+	}
+
+	sourceLabels := c.SourceLabelsJSON
+	if sourceLabels == "" {
+		sourceLabels = `{"last_updated":"2026-01","salary_source":"Carevo Market Research","demand_source":"Nepal Labor Survey 2025","is_verified":false,"confidence_score":60}`
+	}
+
+	metadata := c.MetadataJSON
+	if metadata == "" {
+		metadata = `{"ai_proof_score":50,"freelance_potential":1,"burnout_risk":3,"remote_potential":1}`
+	}
+
+	workLife := c.WorkLifeBalance
+	if workLife == 0 {
+		workLife = 3
+	}
+	creativeSc := c.CreativeScore
+	if creativeSc == 0 {
+		creativeSc = 3
+	}
+	techSc := c.TechnicalScore
+	if techSc == 0 {
+		techSc = 3
+	}
+	freelancePot := c.FreelancePot
+	if freelancePot == 0 {
+		freelancePot = 1
+	}
+
+	var careerID int64
+	err = db.QueryRow(
+		`INSERT INTO careers (title, slug, summary, description, category_id, daily_tasks, skills,
+			salary_min, salary_max, salary_currency, salary_period, difficulty, future_proof_score,
+			education_required, outlook, salary_tiers, demand_data, source_labels, career_metadata,
+			work_life_balance, study_duration, degree_required, creative_score, technical_score,
+			freelance_potential, is_government, is_remote_ok, exam_required, city_salaries, ne_content)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::jsonb,$30::jsonb)
+		ON CONFLICT (slug) DO UPDATE SET
+			title=EXCLUDED.title, summary=EXCLUDED.summary, description=EXCLUDED.description,
+			category_id=EXCLUDED.category_id, daily_tasks=EXCLUDED.daily_tasks, skills=EXCLUDED.skills,
+			salary_min=EXCLUDED.salary_min, salary_max=EXCLUDED.salary_max,
+			salary_currency=EXCLUDED.salary_currency, salary_period=EXCLUDED.salary_period,
+			difficulty=EXCLUDED.difficulty, future_proof_score=EXCLUDED.future_proof_score,
+			education_required=EXCLUDED.education_required, outlook=EXCLUDED.outlook,
+			salary_tiers=EXCLUDED.salary_tiers, demand_data=EXCLUDED.demand_data,
+			source_labels=EXCLUDED.source_labels, career_metadata=EXCLUDED.career_metadata,
+			work_life_balance=EXCLUDED.work_life_balance, study_duration=EXCLUDED.study_duration,
+			degree_required=EXCLUDED.degree_required, creative_score=EXCLUDED.creative_score,
+			technical_score=EXCLUDED.technical_score, freelance_potential=EXCLUDED.freelance_potential,
+			is_government=EXCLUDED.is_government, is_remote_ok=EXCLUDED.is_remote_ok,
+			exam_required=EXCLUDED.exam_required, city_salaries=EXCLUDED.city_salaries,
+			ne_content=EXCLUDED.ne_content
+		RETURNING id`,
+		c.Title, c.Slug, c.Summary, c.Description, catID, tasksJSON, skills,
+		c.SalaryMin, c.SalaryMax, curr, period, c.Difficulty, c.FutureProof,
+		c.EducationReq, c.Outlook,
+		salaryTiers, demandData, sourceLabels, metadata,
+		workLife, c.StudyDuration, c.DegreeRequired, creativeSc, techSc,
+		freelancePot, c.IsGovernment, c.IsRemoteOK, c.ExamRequired,
+		citySalaries, neContent,
+	).Scan(&careerID)
 		if err != nil {
 			log.Fatalf("insert career %s: %v", c.Title, err)
 		}
@@ -224,6 +346,8 @@ func main() {
 	}
 
 	seedSurveyQuestions(db)
+
+	seedAdminUser(db)
 
 	fmt.Println("done!")
 }
@@ -6728,4 +6852,197 @@ func carpetManufacturer() careerSeed {
 			}},
 		},
 	}
+}
+
+func govtSchoolTeacher() careerSeed {
+	return careerSeed{
+		CategoryName: "Government Jobs",
+		CategorySlug: "government-jobs",
+		CategoryDesc: "Stable and respected careers in the public sector offering job security, pensions, and benefits.",
+		CategoryIcon: "🏛️",
+		Title:        "Government Secondary & Higher Level Teacher",
+		Slug:         "government-secondary-higher-level-teacher",
+		Summary:      "Government secondary and higher level teachers work in public schools across Nepal, teaching subjects like math, science, English, social studies, and more to students from grades 6 through 12.",
+		Description:  "A government secondary and higher level teacher in Nepal is a permanent faculty member of a public school, appointed by the Nepal Public Service Commission (Lok Sewa Ayog) or the Teacher Service Commission. Secondary level teachers teach grades 6-10, while higher secondary teachers teach grades 11-12. This is considered one of the most stable and respected careers in Nepal — it offers a government salary scale (scaled with years of service), a guaranteed pension, annual leave, maternity/paternity benefits, and high social status. Teachers follow the national curriculum developed by the Curriculum Development Center (CDC). They prepare lesson plans, deliver instruction, assess students through exams and assignments, manage classrooms, and participate in school development activities. The job is demanding but rewarding — you shape the next generation. Government teachers in Nepal have strong union representation and collective bargaining power. Once you achieve permanent status (sthaye), your job is secure for life. Competition for government teaching posts is intense, especially for popular subjects and urban locations. The selection process includes a highly competitive written exam, interview, and demo teaching. Many teachers supplement their government salary with private tutoring, which is very common and lucrative in Nepal.",
+		DailyTasks: []string{
+			"Deliver lessons according to the national curriculum and school schedule",
+			"Prepare detailed lesson plans with learning objectives and activities",
+			"Create and grade exams, assignments, and homework",
+			"Maintain student attendance, grade records, and progress reports",
+			"Provide extra support to struggling students before or after school",
+			"Participate in staff meetings, school events, and parent-teacher conferences",
+			"Coordinate with other subject teachers on interdisciplinary projects",
+		},
+		Skills: []string{
+			"In-depth knowledge of your subject area (Math, Science, English, Social Studies, etc.)",
+			"Classroom management and student engagement",
+			"Lesson planning and curriculum design",
+			"Assessment and exam preparation",
+			"Patience and empathy with adolescent learners",
+			"Public speaking and clear communication in Nepali and English",
+			"Basic educational technology skills",
+			"Ability to prepare students for SEE, NEB, and scholarship exams",
+		},
+		SalaryMin:    400000,
+		SalaryMax:    900000,
+		SalaryCurrency: "NPR",
+		SalaryPeriod: "yearly",
+		Difficulty:   3,
+		FutureProof:  85,
+		EducationReq: "For secondary level (grades 6-10): Bachelor's degree in Education (B.Ed.) with major in relevant subject, or a Bachelor's degree in a subject plus a one-year B.Ed. For higher secondary (grades 11-12): Master's degree (M.Ed. or M.A.) in the relevant subject. Must pass the Teacher Service Commission (TSC) exam for permanent appointment.",
+		Outlook:      "Government teaching is one of the most stable careers in Nepal. Demand is consistently high, especially for math, science, English, and computer teachers. The government regularly opens new positions through the TSC. Rural areas have severe teacher shortages, so there are often more opportunities outside the Kathmandu Valley. The pension system ensures financial security after retirement. Competition is strong but the job security and benefits make it worth pursuing.",
+		Tags:         []string{"government", "teaching", "stable", "pension", "education", "public-service"},
+		Resources: []resourceSeed{
+			{Title: "Teacher Service Commission Nepal", URL: "https://tsc.gov.np", Description: "Official TSC website — exam notices, syllabus, results, and teacher recruitment information"},
+			{Title: "Curriculum Development Center Nepal", URL: "https://moecdc.gov.np", Description: "National curriculum, textbooks, and teacher guides for all subjects and levels"},
+			{Title: "Lok Sewa Ayog Nepal", URL: "https://psc.gov.np", Description: "Public Service Commission — government job notifications, exam schedules, and results"},
+		},
+		RoadmapSteps: []roadmapSeed{
+			{StepNumber: 1, Title: "Choose your teaching subject and level", Description: "Decide which subject you want to teach (Mathematics, Science, English, Nepali, Social Studies, etc.) and which level (secondary grades 6-10 or higher secondary grades 11-12). Your choice determines your degree path and the TSC exam you will take. Pick a subject you are genuinely passionate about — you will spend decades teaching it. Math, Science, and English teachers are in highest demand. Consider your own academic strengths. Talk to current government teachers about their experience. Visit a local public school and observe classes. Understanding the reality of teaching in Nepal helps you make an informed decision.",
+			Duration: "1-3 months", Links: []roadmapLink{
+				{Title: "Teacher Service Commission - Subject Requirements", URL: "https://tsc.gov.np"},
+				{Title: "Nepal Government Teacher Career Guide (YouTube)", URL: "https://www.youtube.com/results?search_query=government+teacher+career+nepal"},
+				{Title: "Teaching Subjects in Demand in Nepal", URL: "https://www.merojob.com"},
+			}},
+			{StepNumber: 2, Title: "Earn your required degree", Description: "For secondary level: complete a Bachelor of Education (B.Ed.) with a major in your chosen subject. If you already have a Bachelor's in another subject, complete a one-year B.Ed. program. For higher secondary: earn a Master's degree (M.Ed. or M.A.) in your subject area. Many universities in Nepal offer these programs — Tribhuvan University, Kathmandu University, Purbanchal University, and Pokhara University. Consider distance learning options if you need to work while studying. Your degree must be recognized by the TSC. Maintain good grades — TSC exam results may consider your academic performance.",
+			Duration: "1-4 years", Links: []roadmapLink{
+				{Title: "TU Central Department of Education", URL: "https://tribhuvan-university.edu.np"},
+				{Title: "Kathmandu University School of Education", URL: "https://soe.ku.edu.np"},
+				{Title: "Open and Distance Learning Education in Nepal", URL: "https://www.odl.tu.edu.np"},
+			}},
+			{StepNumber: 3, Title: "Prepare for and pass the TSC (Teacher Service Commission) exam", Description: "The TSC teacher selection exam is highly competitive. It consists of a written exam (subject knowledge, teaching methodology, and general knowledge) followed by an interview and demo teaching. Start preparing at least 6-12 months before the exam. Study the TSC syllabus for your subject thoroughly. Solve past exam questions. Consider joining a TSC preparation class in your city. Many coaching centers in Kathmandu, Pokhara, and major cities offer specialized TSC preparation. The competition is fierce — sometimes thousands of applicants for a few dozen positions. Consistent and dedicated preparation is essential. Your exam score determines your ranking and chances of getting a posting.",
+			Duration: "6-12 months", Links: []roadmapLink{
+				{Title: "TSC Exam Syllabus and Past Questions", URL: "https://tsc.gov.np"},
+				{Title: "TSC Preparation Classes in Nepal (YouTube)", URL: "https://www.youtube.com/results?search_query=TSC+preparation+nepal"},
+				{Title: "Lok Sewa General Knowledge Preparation", URL: "https://www.youtube.com/results?search_query=lok+sewa+general+knowledge+nepal"},
+			}},
+			{StepNumber: 4, Title: "Clear the interview and demo teaching round", Description: "If you pass the written exam, you will be called for an interview and demonstration teaching (demo class). The interview panel includes senior educators and TSC officials. They assess your subject knowledge, communication skills, teaching aptitude, and personality. The demo teaching is crucial — you will teach a real lesson to a panel acting as students. Prepare engaging lesson plans, use the board effectively, ask questions, and show classroom management skills. Practice demo teaching with friends or family beforehand. Be confident but humble. Show that you love teaching, not just the government job benefits. Dress professionally and arrive early.",
+			Duration: "1-2 months", Links: []roadmapLink{
+				{Title: "Teacher Interview Tips (YouTube)", URL: "https://www.youtube.com/results?search_query=teacher+interview+tips+nepal"},
+				{Title: "Demo Teaching Techniques (YouTube)", URL: "https://www.youtube.com/results?search_query=demo+teaching+techniques+for+teachers"},
+				{Title: "How to Prepare a Lesson Plan for Demo", URL: "https://www.youtube.com/results?search_query=lesson+plan+for+demo+teaching"},
+			}},
+			{StepNumber: 5, Title: "Get appointed and complete probation", Description: "Selected candidates are appointed to a specific school based on their ranking and available vacancies. You will serve a probation period (usually 1-2 years) before becoming a permanent (sthaye) teacher. During probation, your performance is evaluated by the school principal and local education office. Complete all required paperwork and registration. Build good relationships with your principal, colleagues, students, and parents. Learn the school's culture and systems. Your probation performance determines your confirmation as a permanent government teacher. Once confirmed, you have job security, a pension, and eligibility for promotions and transfers.",
+			Duration: "1-2 years", Links: []roadmapLink{
+				{Title: "Teacher Probation and Confirmation Process (TSC)", URL: "https://tsc.gov.np"},
+				{Title: "Nepal Government Teacher Service Conditions", URL: "https://moe.gov.np"},
+				{Title: "New Teacher Survival Guide for Nepal", URL: "https://www.youtube.com/results?search_query=new+teacher+advice+nepal"},
+			}},
+			{StepNumber: 6, Title: "Pursue promotions and professional development", Description: "Government teachers can be promoted through grades (e.g., From teacher to senior teacher to vice principal to principal). Promotions are based on seniority, additional qualifications, and performance evaluations. Pursue a Master's degree or M.Phil./PhD to qualify for higher positions and salary grades. Attend teacher training programs organized by the Education Training Center (ETC) or NGOs like Room to Read, VSO, and UNICEF. Develop expertise in curriculum development, educational leadership, or special education. Some teachers become education officers, curriculum developers, or teacher trainers. Consider studying abroad for advanced degrees through scholarships. The more qualified you are, the faster you advance.",
+			Duration: "ongoing", Links: []roadmapLink{
+				{Title: "Education Training Center Nepal", URL: "https://www.etc.gov.np"},
+				{Title: "Teacher Professional Development Programs", URL: "https://moe.gov.np"},
+				{Title: "Government Teacher Promotion Criteria Nepal", URL: "https://tsc.gov.np"},
+			}},
+		},
+	}
+}
+
+func youtuber() careerSeed {
+	return careerSeed{
+		CategoryName: "Media & Entertainment",
+		CategorySlug: "media-entertainment",
+		CategoryDesc: "Careers in content creation, entertainment, and digital media production.",
+		CategoryIcon: "🎥",
+		Title:        "YouTuber",
+		Slug:         "youtuber",
+		Summary:      "A YouTuber creates and publishes video content on YouTube, building an audience through engaging videos on topics like education, entertainment, vlogging, gaming, music, and more.",
+		Description:  "A YouTuber is a content creator who produces videos for the YouTube platform. YouTubers can create content on virtually any topic — educational tutorials, travel vlogs, music covers, comedy sketches, gaming streams, cooking shows, tech reviews, motivational talks, and Nepali cultural content. Successful YouTubers earn money through multiple revenue streams: YouTube advertising (AdSense), brand sponsorships, affiliate marketing, merchandise sales, crowdfunding (Patreon, Ko-fi), and paid consulting. Nepal's YouTube ecosystem has grown explosively — creators like Sisan Baniya, Aananda Koirala, Nishan Bhattarai, and many others have shown that YouTubing is a viable full-time career in Nepal. You can start with just a smartphone and an idea. Success requires consistency, patience, and understanding your audience. Most successful YouTubers took 1-3 years before earning meaningful income. The key is finding a niche you are passionate about and creating content that provides value — entertainment, education, or inspiration. YouTube is not a get-rich-quick path but a legitimate career for those who treat it seriously. Top Nepali YouTubers earn more than many traditional professionals.",
+		DailyTasks: []string{
+			"Brainstorm and research video ideas based on trends and audience interests",
+			"Write scripts or outline key points for each video",
+			"Film video content using camera or smartphone",
+			"Edit videos — cut footage, add effects, music, and thumbnails",
+			"Upload and optimize videos with titles, descriptions, tags, and thumbnails",
+			"Engage with audience by replying to comments and community posts",
+			"Plan content calendar, track analytics, and collaborate with other creators",
+		},
+		Skills: []string{
+			"Video scripting and storytelling",
+			"On-camera presence and communication",
+			"Video shooting (framing, lighting, audio)",
+			"Video editing (Premiere Pro, DaVinci Resolve, CapCut)",
+			"YouTube SEO — titles, tags, descriptions, thumbnails",
+			"Audience engagement and community management",
+			"Social media promotion (Instagram, TikTok, Facebook)",
+			"Basic graphic design for thumbnails (Canva, Photoshop)",
+		},
+		SalaryMin:    0,
+		SalaryMax:    5000000,
+		SalaryCurrency: "NPR",
+		SalaryPeriod: "yearly",
+		Difficulty:   4,
+		FutureProof:  60,
+		EducationReq: "No formal education required. You learn by doing. Skills in video editing, scripting, and on-camera presentation matter far more than degrees. Free resources: YouTube Creator Academy, online video editing tutorials. Some creators benefit from media or communication studies at college.",
+		Outlook:      "YouTube and the creator economy are growing rapidly in Nepal. Internet penetration and smartphone usage are increasing every year. More Nepali viewers are consuming digital content than ever before. YouTube monetization is accessible once you reach 1,000 subscribers and 4,000 watch hours. Brand sponsorship deals are becoming more common in Nepal. However, the field is getting more competitive — standing out requires quality, consistency, and a unique angle. Successful YouTubers diversify income across multiple platforms. The creator economy is still young in Nepal — early movers have a significant advantage.",
+		Tags:         []string{"media", "content-creation", "youtube", "entertainment", "digital", "entrepreneurship"},
+		Resources: []resourceSeed{
+			{Title: "YouTube Creator Academy", URL: "https://creatoracademy.youtube.com", Description: "Free official YouTube training on growing your channel, creating content, and monetization"},
+			{Title: "Canva for Thumbnails", URL: "https://www.canva.com", Description: "Free design tool for creating eye-catching YouTube thumbnails and channel art"},
+			{Title: "Nepali YouTube Creator Community (Facebook)", URL: "https://www.facebook.com", Description: "Join Nepali YouTuber groups for collaboration, tips, and local sponsorship opportunities"},
+		},
+		RoadmapSteps: []roadmapSeed{
+			{StepNumber: 1, Title: "Find your niche and define your channel", Description: "Choose what your channel will be about. The most successful YouTube channels focus on a specific niche rather than being general. Possible niches for Nepal: educational content (math, science, English, coding tutorials), travel vlogs (exploring Nepal's 77 districts), food reviews (Nepali restaurants and street food), comedy and skits, music covers, tech reviews (Nepali language), motivational and self-improvement, farming and agriculture, personal finance and investing, or gaming. Pick a niche that aligns with your interests, knowledge, and personality. You will create hundreds of videos — you must genuinely enjoy the topic. Research existing Nepali channels in your niche. Find a unique angle or gap you can fill. Your channel name, branding, and content style should reflect your personality and niche.",
+			Duration: "1-2 months", Links: []roadmapLink{
+				{Title: "How to Find Your YouTube Niche (YouTube)", URL: "https://www.youtube.com/results?search_query=find+your+youtube+niche"},
+				{Title: "Top Nepali YouTube Channels Analysis", URL: "https://www.youtube.com/results?search_query=top+nepali+youtubers"},
+				{Title: "YouTube Creator Academy - Find Your Niche", URL: "https://creatoracademy.youtube.com/page/lesson/niche-discovery"},
+			}},
+			{StepNumber: 2, Title: "Learn basic video production with what you have", Description: "You do not need expensive equipment to start. A smartphone with a good camera (most mid-range phones are fine) and basic free editing software (CapCut, DaVinci Resolve) are enough. Focus on three things: decent lighting (natural light from a window works), clear audio (record in a quiet room, speak clearly), and stable footage (rest your phone on something). Learn basic video editing: cutting, adding text, background music, and transitions. Watch YouTube tutorials for your editing app. Your first videos will not be great. Do not wait until you have perfect equipment. Start with what you have. The sooner you start, the sooner you improve. Many successful Nepali YouTubers started with just a phone and basic editing.",
+			Duration: "1-3 months", Links: []roadmapLink{
+				{Title: "How to Start YouTube with Just a Phone", URL: "https://www.youtube.com/results?search_query=start+youtube+with+phone+nepal"},
+				{Title: "CapCut Video Editing Tutorial (Nepali)", URL: "https://www.youtube.com/results?search_query=capcut+editing+tutorial+nepali"},
+				{Title: "DaVinci Resolve Free Editing Course", URL: "https://www.youtube.com/results?search_query=davinci+resolve+beginner+tutorial"},
+			}},
+			{StepNumber: 3, Title: "Create and upload your first 20-30 videos consistently", Description: "Consistency is the most important factor for YouTube growth. Commit to uploading at least one video per week. Do not judge your early videos harshly — they will be rough. That is normal. Focus on improving one thing each video: better thumbnail, clearer audio, tighter editing, more engaging script. Use YouTube Studio to learn basic SEO: write descriptive titles, fill out descriptions, use relevant tags, and design custom thumbnails. Your first 20-30 videos are practice. The goal is to develop your style, improve your production skills, and start understanding what your audience likes. Every creator's early videos are cringeworthy. Push through and keep creating. Analyze your analytics to see which videos perform better and why.",
+			Duration: "3-6 months", Links: []roadmapLink{
+				{Title: "YouTube SEO for Beginners (Nepali)", URL: "https://www.youtube.com/results?search_query=youtube+seo+nepali"},
+				{Title: "How to Design YouTube Thumbnails (Canva)", URL: "https://www.youtube.com/results?search_query=design+youtube+thumbnail+canva"},
+				{Title: "YouTube Studio Analytics Guide", URL: "https://creatoracademy.youtube.com/page/lesson/analytics"},
+			}},
+			{StepNumber: 4, Title: "Build your audience and community", Description: "Engage with your viewers by responding to comments sincerely. Ask questions in your videos to encourage comments. Create community posts to stay connected between uploads. Collaborate with other Nepali creators in your niche — collaboration exposes both channels to new audiences. Promote your videos on social media (Instagram, TikTok, Facebook, Twitter). Share behind-the-scenes content and teasers. Consistency matters more than viral videos. A channel that grows slowly but steadily with an engaged community is more valuable than a one-hit-wonder. Focus on building a loyal audience that watches every video, not just chasing views. A small but dedicated audience is the foundation of a sustainable YouTube career.",
+			Duration: "6-12 months", Links: []roadmapLink{
+				{Title: "How to Grow Your YouTube Channel (YouTube)", URL: "https://www.youtube.com/results?search_query=grow+youtube+channel+from+0"},
+				{Title: "Nepali YouTuber Collaboration Ideas", URL: "https://www.youtube.com/results?search_query=nepali+youTuber+collaboration"},
+				{Title: "YouTube Community Building Strategies", URL: "https://creatoracademy.youtube.com/page/lesson/community"},
+			}},
+			{StepNumber: 5, Title: "Apply for YouTube Partner Program and monetize", Description: "Once you reach 1,000 subscribers and 4,000 watch hours in the past 12 months, apply for the YouTube Partner Program (YPP). Once approved, you can earn money through AdSense (ads shown on your videos). First earnings are typically small — do not quit your day job immediately. As your channel grows, diversify income: brand sponsorships (Nepali brands pay creators for promotion), affiliate marketing (earn commission promoting products), merchandise (t-shirts, mugs, books), crowdfunding (Patreon for exclusive content), and super chats during live streams. Multiple income streams are essential for financial stability as a creator. Many Nepali YouTubers also offer consulting, coaching, or paid appearances. Keep creating consistently even after monetization — your audience is your asset.",
+			Duration: "1-3 years", Links: []roadmapLink{
+				{Title: "YouTube Partner Program Requirements", URL: "https://support.google.com/youtube/answer/72857"},
+				{Title: "How Nepali YouTubers Make Money", URL: "https://www.youtube.com/results?search_query=how+do+nepali+youtubers+make+money"},
+				{Title: "Brand Sponsorship Guide for Creators", URL: "https://www.youtube.com/results?search_query=brand+sponsorship+for+youtubers"},
+			}},
+			{StepNumber: 6, Title: "Scale your channel into a media business", Description: "As your channel grows, treat it as a business. Consider hiring a video editor, thumbnail designer, or social media manager. Reinvest earnings into better equipment (camera, microphone, lighting). Diversify across platforms — start a podcast, build a TikTok following, create an Instagram presence, launch a newsletter. Consider creating digital products (courses, ebooks) or launching a membership community. Some successful YouTubers expand into offline businesses — events, workshops, merchandise stores. The most successful creators build a personal brand that extends far beyond YouTube. A YouTube channel is a powerful platform that can launch many other career opportunities. Top Nepali creators are now earning incomes comparable to doctors, engineers, and business owners.",
+			Duration: "ongoing", Links: []roadmapLink{
+				{Title: "From YouTuber to Media Business (YouTube)", URL: "https://www.youtube.com/results?search_query=scale+youtube+channel+into+business"},
+				{Title: "Building a Personal Brand as a Creator", URL: "https://www.youtube.com/results?search_query=personal+branding+for+creators"},
+				{Title: "Nepali Digital Creator Economy Trends", URL: "https://www.youtube.com/results?search_query=nepal+creator+economy+2026"},
+			}},
+		},
+	}
+}
+
+func seedAdminUser(db *sqlx.DB) {
+	var count int
+	db.Get(&count, `SELECT COUNT(*) FROM users WHERE email = 'siddharthadhakal3722@gmail.com'`)
+	if count > 0 {
+		db.Exec(`UPDATE users SET is_admin = true, name = 'admin' WHERE email = 'siddharthadhakal3722@gmail.com'`)
+		log.Println("admin user already exists, set admin flag")
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("Balakotalu77"), bcrypt.DefaultCost)
+	if err != nil {
+		log.Fatalf("failed to hash admin password: %v", err)
+	}
+
+	_, err = db.Exec(
+		`INSERT INTO users (email, password_hash, name, is_admin) VALUES ($1, $2, $3, true)`,
+		"siddharthadhakal3722@gmail.com", string(hash), "admin",
+	)
+	if err != nil {
+		log.Fatalf("failed to create admin user: %v", err)
+	}
+
+	log.Println("admin user seeded")
 }
