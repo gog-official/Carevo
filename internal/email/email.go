@@ -1,6 +1,7 @@
 package email
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log"
@@ -21,7 +22,7 @@ func NewSender(from, password string) *Sender {
 		From:     from,
 		Password: password,
 		Host:     "smtp.gmail.com",
-		Port:     "587",
+		Port:     "465",
 	}
 }
 
@@ -43,21 +44,43 @@ func (s *Sender) sendSMTP(to, subject, body string) error {
 	addr := fmt.Sprintf("%s:%s", s.Host, s.Port)
 	log.Printf("SMTP dialing %s...", addr)
 
-	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
-	if err != nil {
-		return fmt.Errorf("tcp dial: %w", err)
+	addrs, lookupErr := net.LookupHost(s.Host)
+	log.Printf("resolved %s -> %v (err: %v)", s.Host, addrs, lookupErr)
+
+	var conn net.Conn
+	var dialErr error
+
+	d := net.Dialer{Timeout: 10 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, dialErr = d.DialContext(ctx, "tcp", addr)
+	if dialErr != nil {
+		return fmt.Errorf("tcp dial: %w", dialErr)
 	}
 	defer conn.Close()
 
-	client, err := smtp.NewClient(conn, s.Host)
-	if err != nil {
-		return fmt.Errorf("new client: %w", err)
+	var client *smtp.Client
+	var err error
+
+	if s.Port == "465" {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: s.Host})
+		if err := tlsConn.Handshake(); err != nil {
+			return fmt.Errorf("tls handshake: %w", err)
+		}
+		client, err = smtp.NewClient(tlsConn, s.Host)
+		if err != nil {
+			return fmt.Errorf("new tls client: %w", err)
+		}
+	} else {
+		client, err = smtp.NewClient(conn, s.Host)
+		if err != nil {
+			return fmt.Errorf("new client: %w", err)
+		}
+		if err := client.StartTLS(&tls.Config{ServerName: s.Host}); err != nil {
+			return fmt.Errorf("starttls: %w", err)
+		}
 	}
 	defer client.Close()
-
-	if err := client.StartTLS(&tls.Config{ServerName: s.Host}); err != nil {
-		return fmt.Errorf("starttls: %w", err)
-	}
 
 	auth := smtp.PlainAuth("", s.From, s.Password, s.Host)
 	if err := client.Auth(auth); err != nil {
