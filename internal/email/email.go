@@ -1,11 +1,15 @@
 package email
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"net/smtp"
+	"os"
 	"time"
 )
 
@@ -26,6 +30,50 @@ func NewSender(from, password string) *Sender {
 }
 
 func (s *Sender) Send(to, subject, body string) error {
+	if apiKey := os.Getenv("RESEND_API_KEY"); apiKey != "" {
+		return s.sendResend(apiKey, to, subject, body)
+	}
+	if s.Password != "" {
+		return s.sendSMTP(to, subject, body)
+	}
+	return fmt.Errorf("no email provider configured (set RESEND_API_KEY or SMTP_PASSWORD)")
+}
+
+func (s *Sender) sendResend(apiKey, to, subject, body string) error {
+	payload := map[string]interface{}{
+		"from":    s.From,
+		"to":      []string{to},
+		"subject": subject,
+		"text":    body,
+	}
+	data, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest("POST", "https://api.resend.com/emails", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("resend request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("resend api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		var errResp struct {
+			Message string `json:"message"`
+		}
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		return fmt.Errorf("resend api status %d: %s", resp.StatusCode, errResp.Message)
+	}
+
+	return nil
+}
+
+func (s *Sender) sendSMTP(to, subject, body string) error {
 	if s.Password == "" {
 		return fmt.Errorf("SMTP password not configured")
 	}
