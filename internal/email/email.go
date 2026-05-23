@@ -2,11 +2,9 @@ package email
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/smtp"
 	"os"
@@ -25,18 +23,17 @@ func NewSender(from, password string) *Sender {
 		From:     from,
 		Password: password,
 		Host:     "smtp.gmail.com",
-		Port:     "465",
+		Port:     "587",
 	}
 }
 
 func (s *Sender) Send(to, subject, body string) error {
 	if apiKey := os.Getenv("RESEND_API_KEY"); apiKey != "" {
+		log.Printf("trying Resend API...")
 		return s.sendResend(apiKey, to, subject, body)
 	}
-	if s.Password != "" {
-		return s.sendSMTP(to, subject, body)
-	}
-	return fmt.Errorf("no email provider configured (set RESEND_API_KEY or SMTP_PASSWORD)")
+	log.Printf("trying SMTP %s:%s...", s.Host, s.Port)
+	return s.sendSMTP(to, subject, body)
 }
 
 func (s *Sender) sendResend(apiKey, to, subject, body string) error {
@@ -74,58 +71,44 @@ func (s *Sender) sendResend(apiKey, to, subject, body string) error {
 		return fmt.Errorf("resend api status %d: %s", resp.StatusCode, errResp.Message)
 	}
 
+	log.Printf("Resend API success for %s", to)
 	return nil
 }
 
 func (s *Sender) sendSMTP(to, subject, body string) error {
 	if s.Password == "" {
-		return fmt.Errorf("SMTP password not configured")
+		return fmt.Errorf("SMTP password not set (SMTP_PASSWORD)")
 	}
 
-	header := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n", s.From, to, subject)
-	msg := []byte(header + body)
-
-	tlsConfig := &tls.Config{ServerName: s.Host}
-
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", s.Host+":"+s.Port, tlsConfig)
-	if err != nil {
-		return fmt.Errorf("tls dial: %w", err)
-	}
-	defer conn.Close()
-
-	client, err := smtp.NewClient(conn, s.Host)
-	if err != nil {
-		return fmt.Errorf("smtp client: %w", err)
-	}
-	defer client.Close()
+	msg := []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n%s", s.From, to, subject, body))
 
 	auth := smtp.PlainAuth("", s.From, s.Password, s.Host)
-	if err := client.Auth(auth); err != nil {
-		return fmt.Errorf("auth: %w", err)
-	}
+	addr := fmt.Sprintf("%s:%s", s.Host, s.Port)
 
-	if err := client.Mail(s.From); err != nil {
-		return fmt.Errorf("mail from: %w", err)
-	}
-
-	if err := client.Rcpt(to); err != nil {
-		return fmt.Errorf("rcpt: %w", err)
-	}
-
-	w, err := client.Data()
+	log.Printf("SMTP dialing %s...", addr)
+	err := sendMailTimeout(addr, auth, s.From, []string{to}, msg, 15*time.Second)
 	if err != nil {
-		return fmt.Errorf("data: %w", err)
+		return fmt.Errorf("smtp send: %w", err)
 	}
+	log.Printf("SMTP success for %s", to)
+	return nil
+}
 
-	if _, err := w.Write(msg); err != nil {
-		return fmt.Errorf("write: %w", err)
+func sendMailTimeout(addr string, a smtp.Auth, from string, to []string, msg []byte, timeout time.Duration) error {
+	type result struct {
+		err error
 	}
-
-	if err := w.Close(); err != nil {
-		return fmt.Errorf("close: %w", err)
+	ch := make(chan result, 1)
+	go func() {
+		err := smtp.SendMail(addr, a, from, to, msg)
+		ch <- result{err}
+	}()
+	select {
+	case r := <-ch:
+		return r.err
+	case <-time.After(timeout):
+		return fmt.Errorf("connection timed out after %v", timeout)
 	}
-
-	return client.Quit()
 }
 
 func (s *Sender) SendVerificationCode(to, code string) error {
@@ -140,10 +123,13 @@ If you didn't create an account, you can ignore this email.
 
 - Carevo Team`, code)
 
+	log.Printf("Sending verification code %s to %s...", code, to)
 	if err := s.Send(to, subject, body); err != nil {
-		log.Printf("email send failed to %s (code %s logged as fallback): %v", to, code, err)
+		log.Printf("EMAIL FAILED to %s (code %s): %v", to, code, err)
+		log.Printf("--- VERIFICATION CODE for %s (email failed): %s ---", to, code)
+	} else {
+		log.Printf("EMAIL SENT to %s with code %s", to, code)
 	}
-	log.Printf("--- VERIFICATION CODE for %s: %s ---", to, code)
 	return nil
 }
 
@@ -157,8 +143,9 @@ It will be added to Carevo soon. Thank you for helping us grow our career databa
 
 - Carevo Team`, title)
 
+	log.Printf("Sending approval to %s...", to)
 	if err := s.Send(to, subject, body); err != nil {
-		log.Printf("email send failed to %s: %v", to, err)
+		log.Printf("EMAIL FAILED approval to %s: %v", to, err)
 	}
 	return nil
 }
@@ -173,8 +160,9 @@ Thank you for your contribution!
 
 - Carevo Team`, title)
 
+	log.Printf("Sending rejection to %s...", to)
 	if err := s.Send(to, subject, body); err != nil {
-		log.Printf("email send failed to %s: %v", to, err)
+		log.Printf("EMAIL FAILED rejection to %s: %v", to, err)
 	}
 	return nil
 }
