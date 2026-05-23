@@ -1,13 +1,11 @@
 package email
 
 import (
-	"bytes"
-	"encoding/json"
+	"crypto/tls"
 	"fmt"
 	"log"
-	"net/http"
+	"net"
 	"net/smtp"
-	"os"
 	"time"
 )
 
@@ -28,58 +26,11 @@ func NewSender(from, password string) *Sender {
 }
 
 func (s *Sender) Send(to, subject, body string) error {
-	if s.Password != "" {
-		log.Printf("trying SMTP %s:%s...", s.Host, s.Port)
-		err := s.sendSMTP(to, subject, body)
-		if err == nil {
-			return nil
-		}
-		log.Printf("SMTP failed: %v", err)
+	if s.Password == "" {
+		return fmt.Errorf("SMTP password not set (SMTP_PASSWORD)")
 	}
-	if apiKey := os.Getenv("RESEND_API_KEY"); apiKey != "" {
-		log.Printf("trying Resend API...")
-		return s.sendResend(apiKey, to, subject, body)
-	}
-	return fmt.Errorf("no email provider could send (set SMTP_PASSWORD or RESEND_API_KEY)")
-}
-
-func (s *Sender) sendResend(apiKey, to, subject, body string) error {
-	from := os.Getenv("EMAIL_FROM")
-	if from == "" {
-		from = "Carevo <onboarding@resend.dev>"
-	}
-	payload := map[string]interface{}{
-		"from":    from,
-		"to":      []string{to},
-		"subject": subject,
-		"text":    body,
-	}
-	data, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest("POST", "https://api.resend.com/emails", bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("resend request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("resend api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		var errResp struct {
-			Message string `json:"message"`
-		}
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		return fmt.Errorf("resend api status %d: %s", resp.StatusCode, errResp.Message)
-	}
-
-	log.Printf("Resend API success for %s", to)
-	return nil
+	log.Printf("trying SMTP %s:%s...", s.Host, s.Port)
+	return s.sendSMTP(to, subject, body)
 }
 
 func (s *Sender) sendSMTP(to, subject, body string) error {
@@ -89,33 +40,52 @@ func (s *Sender) sendSMTP(to, subject, body string) error {
 
 	msg := []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n%s", s.From, to, subject, body))
 
-	auth := smtp.PlainAuth("", s.From, s.Password, s.Host)
 	addr := fmt.Sprintf("%s:%s", s.Host, s.Port)
-
 	log.Printf("SMTP dialing %s...", addr)
-	err := sendMailTimeout(addr, auth, s.From, []string{to}, msg, 15*time.Second)
-	if err != nil {
-		return fmt.Errorf("smtp send: %w", err)
-	}
-	log.Printf("SMTP success for %s", to)
-	return nil
-}
 
-func sendMailTimeout(addr string, a smtp.Auth, from string, to []string, msg []byte, timeout time.Duration) error {
-	type result struct {
-		err error
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("tcp dial: %w", err)
 	}
-	ch := make(chan result, 1)
-	go func() {
-		err := smtp.SendMail(addr, a, from, to, msg)
-		ch <- result{err}
-	}()
-	select {
-	case r := <-ch:
-		return r.err
-	case <-time.After(timeout):
-		return fmt.Errorf("connection timed out after %v", timeout)
+	defer conn.Close()
+
+	client, err := smtp.NewClient(conn, s.Host)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
 	}
+	defer client.Close()
+
+	if err := client.StartTLS(&tls.Config{ServerName: s.Host}); err != nil {
+		return fmt.Errorf("starttls: %w", err)
+	}
+
+	auth := smtp.PlainAuth("", s.From, s.Password, s.Host)
+	if err := client.Auth(auth); err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+
+	if err := client.Mail(s.From); err != nil {
+		return fmt.Errorf("mail from: %w", err)
+	}
+
+	if err := client.Rcpt(to); err != nil {
+		return fmt.Errorf("rcpt: %w", err)
+	}
+
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("data: %w", err)
+	}
+
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+
+	return client.Quit()
 }
 
 func (s *Sender) SendVerificationCode(to, code string) error {
