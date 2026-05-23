@@ -7023,26 +7023,33 @@ func youtuber() careerSeed {
 }
 
 func seedAdminUser(db *sqlx.DB) {
-	var count int
-	db.Get(&count, `SELECT COUNT(*) FROM users WHERE email = 'siddharthadhakal3722@gmail.com'`)
-	if count > 0 {
-		db.Exec(`UPDATE users SET is_admin = true, name = 'admin' WHERE email = 'siddharthadhakal3722@gmail.com'`)
-		log.Println("admin user already exists, set admin flag")
-		return
+	emails := []string{
+		"siddharthadhakal3722@gmail.com",
+		"siddharthadhakall3722@gmail.com",
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte("Balakotalu77"), bcrypt.DefaultCost)
-	if err != nil {
-		log.Fatalf("failed to hash admin password: %v", err)
-	}
+	for _, email := range emails {
+		var count int
+		db.Get(&count, `SELECT COUNT(*) FROM users WHERE email = $1`, email)
+		if count > 0 {
+			db.Exec(`UPDATE users SET is_admin = true WHERE email = $1`, email)
+			log.Printf("admin user %s already exists, set admin flag", email)
+			continue
+		}
 
-	_, err = db.Exec(
-		`INSERT INTO users (email, password_hash, name, is_admin) VALUES ($1, $2, $3, true)`,
-		"siddharthadhakal3722@gmail.com", string(hash), "admin",
-	)
-	if err != nil {
-		log.Fatalf("failed to create admin user: %v", err)
-	}
+		hash, err := bcrypt.GenerateFromPassword([]byte("Balakotalu77"), bcrypt.DefaultCost)
+		if err != nil {
+			log.Fatalf("failed to hash admin password: %v", err)
+		}
 
-	log.Println("admin user seeded")
+		_, err = db.Exec(
+			`INSERT INTO users (email, password_hash, name, is_admin) VALUES ($1, $2, $3, true)`,
+			email, string(hash), "admin",
+		)
+		if err != nil {
+			log.Fatalf("failed to create admin user %s: %v", email, err)
+		}
+
+		log.Printf("admin user %s seeded", email)
+	}
 }
