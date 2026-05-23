@@ -1,6 +1,7 @@
 package email
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net/smtp"
 )
@@ -17,17 +18,59 @@ func NewSender(from, password string) *Sender {
 		From:     from,
 		Password: password,
 		Host:     "smtp.gmail.com",
-		Port:     "587",
+		Port:     "465",
 	}
 }
 
 func (s *Sender) Send(to, subject, body string) error {
-	msg := []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n%s", s.From, to, subject, body))
+	header := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n", s.From, to, subject)
+	msg := []byte(header + body)
 
-	auth := smtp.PlainAuth("", s.From, s.Password, s.Host)
+	tlsConfig := &tls.Config{
+		ServerName: s.Host,
+	}
+
 	addr := fmt.Sprintf("%s:%s", s.Host, s.Port)
 
-	return smtp.SendMail(addr, auth, s.From, []string{to}, msg)
+	conn, err := tls.Dial("tcp", addr, tlsConfig)
+	if err != nil {
+		return fmt.Errorf("tls dial: %w", err)
+	}
+	defer conn.Close()
+
+	client, err := smtp.NewClient(conn, s.Host)
+	if err != nil {
+		return fmt.Errorf("smtp client: %w", err)
+	}
+	defer client.Close()
+
+	auth := smtp.PlainAuth("", s.From, s.Password, s.Host)
+	if err := client.Auth(auth); err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+
+	if err := client.Mail(s.From); err != nil {
+		return fmt.Errorf("mail from: %w", err)
+	}
+
+	if err := client.Rcpt(to); err != nil {
+		return fmt.Errorf("rcpt: %w", err)
+	}
+
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("data: %w", err)
+	}
+
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+
+	return client.Quit()
 }
 
 func (s *Sender) SendVerificationCode(to, code string) error {
