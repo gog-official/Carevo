@@ -40,8 +40,12 @@ func (s *Sender) Send(to, subject, body string) error {
 }
 
 func (s *Sender) sendResend(apiKey, to, subject, body string) error {
+	from := os.Getenv("EMAIL_FROM")
+	if from == "" {
+		from = "Carevo <onboarding@resend.dev>"
+	}
 	payload := map[string]interface{}{
-		"from":    s.From,
+		"from":    from,
 		"to":      []string{to},
 		"subject": subject,
 		"text":    body,
