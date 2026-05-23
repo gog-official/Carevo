@@ -28,12 +28,19 @@ func NewSender(from, password string) *Sender {
 }
 
 func (s *Sender) Send(to, subject, body string) error {
+	if s.Password != "" {
+		log.Printf("trying SMTP %s:%s...", s.Host, s.Port)
+		err := s.sendSMTP(to, subject, body)
+		if err == nil {
+			return nil
+		}
+		log.Printf("SMTP failed: %v", err)
+	}
 	if apiKey := os.Getenv("RESEND_API_KEY"); apiKey != "" {
 		log.Printf("trying Resend API...")
 		return s.sendResend(apiKey, to, subject, body)
 	}
-	log.Printf("trying SMTP %s:%s...", s.Host, s.Port)
-	return s.sendSMTP(to, subject, body)
+	return fmt.Errorf("no email provider could send (set SMTP_PASSWORD or RESEND_API_KEY)")
 }
 
 func (s *Sender) sendResend(apiKey, to, subject, body string) error {
