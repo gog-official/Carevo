@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/smtp"
+	"strings"
 	"time"
 )
 
@@ -44,16 +45,46 @@ func (s *Sender) sendSMTP(to, subject, body string) error {
 	addr := fmt.Sprintf("%s:%s", s.Host, s.Port)
 	log.Printf("SMTP dialing %s...", addr)
 
-	addrs, lookupErr := net.LookupHost(s.Host)
-	log.Printf("resolved %s -> %v (err: %v)", s.Host, addrs, lookupErr)
+	// Force IPv6 dialing to avoid IPv4 connectivity issues
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
+	d := net.Dialer{Timeout: 10 * time.Second}
+
+	// Pre-resolve and try IPv6 first
 	var conn net.Conn
 	var dialErr error
 
-	d := net.Dialer{Timeout: 10 * time.Second}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	conn, dialErr = d.DialContext(ctx, "tcp", addr)
+	addrs, _ := net.LookupHost(s.Host)
+	log.Printf("resolved %s -> %v", s.Host, addrs)
+
+	for _, ip := range addrs {
+		if isIPv6(ip) {
+			log.Printf("trying IPv6 [%s]:%s...", ip, s.Port)
+			conn, dialErr = d.DialContext(ctx, "tcp6", net.JoinHostPort(ip, s.Port))
+			if dialErr == nil {
+				break
+			}
+			log.Printf("IPv6 dial failed: %v", dialErr)
+		}
+	}
+
+	if conn == nil {
+		for _, ip := range addrs {
+			if !isIPv6(ip) {
+				log.Printf("trying IPv4 %s:%s...", ip, s.Port)
+				conn, dialErr = d.DialContext(ctx, "tcp4", net.JoinHostPort(ip, s.Port))
+				if dialErr == nil {
+					break
+				}
+				log.Printf("IPv4 dial failed: %v", dialErr)
+			}
+		}
+	}
+
+	if conn == nil {
+		return fmt.Errorf("tcp dial: %w", dialErr)
+	}
 	if dialErr != nil {
 		return fmt.Errorf("tcp dial: %w", dialErr)
 	}
@@ -109,6 +140,10 @@ func (s *Sender) sendSMTP(to, subject, body string) error {
 	}
 
 	return client.Quit()
+}
+
+func isIPv6(s string) bool {
+	return strings.Contains(s, ":")
 }
 
 func (s *Sender) SendVerificationCode(to, code string) error {
