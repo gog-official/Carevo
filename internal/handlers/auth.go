@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -62,10 +63,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		user.ID, code, time.Now().Add(10*time.Minute),
 	)
 
-	if err := h.mailer.SendVerificationCode(user.Email, code); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to send verification email"})
-		return
-	}
+	go func() {
+		if err := h.mailer.SendVerificationCode(user.Email, code); err != nil {
+			fmt.Printf("failed to send verification email to %s: %v\n", user.Email, err)
+		}
+	}()
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"message":             "verification code sent to your email",

@@ -50,10 +50,11 @@ func (h *VerifyHandler) SendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.mailer.SendVerificationCode(emailAddr, code); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to send email"})
-		return
-	}
+	go func() {
+		if err := h.mailer.SendVerificationCode(emailAddr, code); err != nil {
+			fmt.Printf("failed to send verification email to %s: %v\n", emailAddr, err)
+		}
+	}()
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "verification code sent"})
 }

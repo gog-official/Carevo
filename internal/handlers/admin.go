@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/guruorgoru/carevo/internal/email"
@@ -105,10 +106,20 @@ func (h *AdminHandler) UpdateSuggestionStatus(w http.ResponseWriter, r *http.Req
 	}
 
 	if h.mailer != nil {
+		userEmail := suggestion.UserEmail
+		title := suggestion.Title
 		if req.Status == "approved" {
-			h.mailer.SendSuggestionApproved(suggestion.UserEmail, suggestion.Title)
+			go func() {
+				if err := h.mailer.SendSuggestionApproved(userEmail, title); err != nil {
+					fmt.Printf("failed to send approval email to %s: %v\n", userEmail, err)
+				}
+			}()
 		} else if req.Status == "rejected" {
-			h.mailer.SendSuggestionRejected(suggestion.UserEmail, suggestion.Title)
+			go func() {
+				if err := h.mailer.SendSuggestionRejected(userEmail, title); err != nil {
+					fmt.Printf("failed to send rejection email to %s: %v\n", userEmail, err)
+				}
+			}()
 		}
 	}
 
