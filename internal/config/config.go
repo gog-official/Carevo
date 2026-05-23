@@ -24,9 +24,9 @@ type Config struct {
 	CloudinaryCloud   string
 	CloudinaryKey     string
 	CloudinarySecret  string
-	AdminEmail        string
-	SMTPFrom          string
-	SMTPPassword      string
+	AdminEmail       string
+	SMTPFrom         string
+	SendGridAPIKey   string
 }
 
 func Load() (*Config, error) {
@@ -69,9 +69,9 @@ func Load() (*Config, error) {
 		CloudinaryCloud:   getEnv("CLOUDINARY_CLOUD", ""),
 		CloudinaryKey:     getEnv("CLOUDINARY_KEY", ""),
 		CloudinarySecret:  getEnv("CLOUDINARY_SECRET", ""),
-		AdminEmail:        getEnv("ADMIN_EMAIL", "siddharthadhakal3722@gmail.com"),
-		SMTPFrom:          getEnv("SMTP_FROM", "siddharthadhakal3722@gmail.com"),
-		SMTPPassword:      getEnv("SMTP_PASSWORD", ""),
+		AdminEmail:       getEnv("ADMIN_EMAIL", "siddharthadhakal3722@gmail.com"),
+		SMTPFrom:         getEnv("SMTP_FROM", "siddharthadhakal3722@gmail.com"),
+		SendGridAPIKey:   getEnv("SENDGRID_API_KEY", ""),
 	}, nil
 }
 

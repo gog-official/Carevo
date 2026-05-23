@@ -59,7 +59,7 @@ func main() {
 	aiWorker := ai.NewWorker(db, aiProvider)
 	aiWorker.Start(context.Background())
 
-	mailer := email.NewSender(cfg.SMTPFrom, cfg.SMTPPassword)
+	mailer := email.NewSender(cfg.SMTPFrom, cfg.SendGridAPIKey)
 
 	deps := router.Dependencies{
 		DB:               db,

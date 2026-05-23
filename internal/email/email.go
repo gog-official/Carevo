@@ -1,149 +1,77 @@
 package email
 
 import (
-	"context"
-	"crypto/tls"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
-	"net"
-	"net/smtp"
-	"strings"
+	"net/http"
 	"time"
 )
 
 type Sender struct {
-	From     string
-	Password string
-	Host     string
-	Port     string
+	From   string
+	APIKey string
 }
 
-func NewSender(from, password string) *Sender {
+func NewSender(from, apiKey string) *Sender {
 	return &Sender{
-		From:     from,
-		Password: password,
-		Host:     "smtp.gmail.com",
-		Port:     "465",
+		From:   from,
+		APIKey: apiKey,
 	}
 }
 
 func (s *Sender) Send(to, subject, body string) error {
-	if s.Password == "" {
-		return fmt.Errorf("SMTP password not set (SMTP_PASSWORD)")
-	}
-	log.Printf("trying SMTP %s:%s...", s.Host, s.Port)
-	return s.sendSMTP(to, subject, body)
-}
-
-func (s *Sender) sendSMTP(to, subject, body string) error {
-	if s.Password == "" {
-		return fmt.Errorf("SMTP password not set (SMTP_PASSWORD)")
+	if s.APIKey == "" {
+		return fmt.Errorf("SendGrid API key not set (SENDGRID_API_KEY)")
 	}
 
-	msg := []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n%s", s.From, to, subject, body))
-
-	addr := fmt.Sprintf("%s:%s", s.Host, s.Port)
-	log.Printf("SMTP dialing %s...", addr)
-
-	// Force IPv6 dialing to avoid IPv4 connectivity issues
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	d := net.Dialer{Timeout: 10 * time.Second}
-
-	// Pre-resolve and try IPv6 first
-	var conn net.Conn
-	var dialErr error
-
-	addrs, _ := net.LookupHost(s.Host)
-	log.Printf("resolved %s -> %v", s.Host, addrs)
-
-	for _, ip := range addrs {
-		if isIPv6(ip) {
-			log.Printf("trying IPv6 [%s]:%s...", ip, s.Port)
-			conn, dialErr = d.DialContext(ctx, "tcp6", net.JoinHostPort(ip, s.Port))
-			if dialErr == nil {
-				break
-			}
-			log.Printf("IPv6 dial failed: %v", dialErr)
-		}
+	payload := map[string]interface{}{
+		"personalizations": []map[string]interface{}{
+			{"to": []map[string]string{{"email": to}}},
+		},
+		"from":    map[string]string{"email": s.From},
+		"subject": subject,
+		"content": []map[string]string{
+			{"type": "text/plain", "value": body},
+		},
 	}
 
-	if conn == nil {
-		for _, ip := range addrs {
-			if !isIPv6(ip) {
-				log.Printf("trying IPv4 %s:%s...", ip, s.Port)
-				conn, dialErr = d.DialContext(ctx, "tcp4", net.JoinHostPort(ip, s.Port))
-				if dialErr == nil {
-					break
-				}
-				log.Printf("IPv4 dial failed: %v", dialErr)
-			}
-		}
-	}
-
-	if conn == nil {
-		return fmt.Errorf("tcp dial: %w", dialErr)
-	}
-	if dialErr != nil {
-		return fmt.Errorf("tcp dial: %w", dialErr)
-	}
-	defer conn.Close()
-
-	var client *smtp.Client
-	var err error
-
-	if s.Port == "465" {
-		tlsConn := tls.Client(conn, &tls.Config{ServerName: s.Host})
-		if err := tlsConn.Handshake(); err != nil {
-			return fmt.Errorf("tls handshake: %w", err)
-		}
-		client, err = smtp.NewClient(tlsConn, s.Host)
-		if err != nil {
-			return fmt.Errorf("new tls client: %w", err)
-		}
-	} else {
-		client, err = smtp.NewClient(conn, s.Host)
-		if err != nil {
-			return fmt.Errorf("new client: %w", err)
-		}
-		if err := client.StartTLS(&tls.Config{ServerName: s.Host}); err != nil {
-			return fmt.Errorf("starttls: %w", err)
-		}
-	}
-	defer client.Close()
-
-	auth := smtp.PlainAuth("", s.From, s.Password, s.Host)
-	if err := client.Auth(auth); err != nil {
-		return fmt.Errorf("auth: %w", err)
-	}
-
-	if err := client.Mail(s.From); err != nil {
-		return fmt.Errorf("mail from: %w", err)
-	}
-
-	if err := client.Rcpt(to); err != nil {
-		return fmt.Errorf("rcpt: %w", err)
-	}
-
-	w, err := client.Data()
+	data, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("data: %w", err)
+		return fmt.Errorf("json marshal: %w", err)
 	}
 
-	if _, err := w.Write(msg); err != nil {
-		return fmt.Errorf("write: %w", err)
+	req, err := http.NewRequest("POST", "https://api.sendgrid.com/v3/mail/send", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("sendgrid api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		var errResp struct {
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		msg := ""
+		if len(errResp.Errors) > 0 {
+			msg = errResp.Errors[0].Message
+		}
+		return fmt.Errorf("sendgrid api status %d: %s", resp.StatusCode, msg)
 	}
 
-	if err := w.Close(); err != nil {
-		return fmt.Errorf("close: %w", err)
-	}
-
-	return client.Quit()
-}
-
-func isIPv6(s string) bool {
-	return strings.Contains(s, ":")
+	log.Printf("SendGrid success for %s", to)
+	return nil
 }
 
 func (s *Sender) SendVerificationCode(to, code string) error {
