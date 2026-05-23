@@ -143,15 +143,28 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 	result, err := w.provider.GenerateJSON(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		errMsg := fmt.Sprintf("AI provider error: %v", err)
-		w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg)
+		if _, uerr := w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg); uerr != nil {
+			log.Printf("worker: update error for user %d: %v", userID, uerr)
+		}
 		log.Printf("worker: ai generate for user %d: %v", userID, err)
+		return
+	}
+
+	if strings.TrimSpace(result) == "" {
+		errMsg := "AI returned empty response"
+		if _, uerr := w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg); uerr != nil {
+			log.Printf("worker: update error for user %d: %v", userID, uerr)
+		}
+		log.Printf("worker: empty response for user %d", userID)
 		return
 	}
 
 	var scored models.ScoredCareerList
 	if err := json.Unmarshal([]byte(result), &scored); err != nil {
 		errMsg := fmt.Sprintf("failed to parse AI response: %v", err)
-		w.db.Exec(`UPDATE ai_results SET raw_response = $2, status = 'error', error_message = $3 WHERE user_id = $1`, userID, result, errMsg)
+		if _, uerr := w.db.Exec(`UPDATE ai_results SET raw_response = NULL, status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg); uerr != nil {
+			log.Printf("worker: update error for user %d: %v", userID, uerr)
+		}
 		log.Printf("worker: parse response for user %d: %v", userID, err)
 		return
 	}
