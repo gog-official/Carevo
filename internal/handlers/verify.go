@@ -8,17 +8,25 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/guruorgoru/carevo/internal/auth"
 	"github.com/guruorgoru/carevo/internal/email"
+	"github.com/guruorgoru/carevo/internal/models"
 	"github.com/jmoiron/sqlx"
 )
 
 type VerifyHandler struct {
-	db     *sqlx.DB
-	mailer *email.Sender
+	db         *sqlx.DB
+	mailer     *email.Sender
+	jwtService *auth.JWTService
 }
 
-func NewVerifyHandler(db *sqlx.DB, mailer *email.Sender) *VerifyHandler {
-	return &VerifyHandler{db: db, mailer: mailer}
+func NewVerifyHandler(db *sqlx.DB, mailer *email.Sender, jwtService *auth.JWTService) *VerifyHandler {
+	return &VerifyHandler{db: db, mailer: mailer, jwtService: jwtService}
+}
+
+type TokenPair struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type sendCodeRequest struct {
@@ -96,7 +104,40 @@ func (h *VerifyHandler) Verify(w http.ResponseWriter, r *http.Request) {
 
 	h.db.Exec(`DELETE FROM verification_codes WHERE user_id = $1`, userID)
 
-	writeJSON(w, http.StatusOK, map[string]string{"message": "email verified"})
+	var user models.User
+	if err := h.db.Get(&user, `SELECT * FROM users WHERE id = $1`, userID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch user"})
+		return
+	}
+
+	access, err := h.jwtService.GenerateAccessToken(user.ID, user.Email)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate tokens"})
+		return
+	}
+
+	raw, hashed, err := h.jwtService.GenerateRefreshToken()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate tokens"})
+		return
+	}
+
+	_, err = h.db.Exec(
+		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, hashed, time.Now().Add(h.jwtService.RefreshTokenTTL()),
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to store refresh token"})
+		return
+	}
+
+	tokens := TokenPair{AccessToken: access, RefreshToken: raw}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "email verified",
+		"user":    user,
+		"tokens":  tokens,
+	})
 }
 
 func generateCode() string {

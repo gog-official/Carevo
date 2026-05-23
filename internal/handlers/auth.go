@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -36,42 +35,44 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if user already exists (verified)
+	var exists bool
+	h.db.Get(&exists, `SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)`, req.Email)
+	if exists {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "email already in use"})
+		return
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to hash password"})
 		return
 	}
 
-	var user models.User
-	err = h.db.QueryRowx(
-		`INSERT INTO users (email, password_hash, name, email_verified) VALUES ($1, $2, $3, false)
-		 RETURNING id, email, name, bio, avatar_url, auth_provider, is_admin, email_verified, created_at, updated_at`,
-		req.Email, string(hash), req.Name,
-	).StructScan(&user)
+	code := generateCode()
+
+	// Upsert into pending_users (in case they already have a pending but unverified registration)
+	_, err = h.db.Exec(
+		`INSERT INTO pending_users (email, password_hash, name, code, expires_at)
+		 VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (email) DO UPDATE SET
+		   password_hash = EXCLUDED.password_hash,
+		   name = EXCLUDED.name,
+		   code = EXCLUDED.code,
+		   expires_at = EXCLUDED.expires_at,
+		   updated_at = NOW()`,
+		req.Email, string(hash), req.Name, code, time.Now().Add(10*time.Minute),
+	)
 	if err != nil {
-		if isUniqueViolation(err) {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "email already in use"})
-			return
-		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create user"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create registration"})
 		return
 	}
 
-	code := generateCode()
-	h.db.Exec(
-		`INSERT INTO verification_codes (user_id, code, expires_at) VALUES ($1, $2, $3)`,
-		user.ID, code, time.Now().Add(10*time.Minute),
-	)
-
-	go func() {
-		if err := h.mailer.SendVerificationCode(user.Email, code); err != nil {
-			fmt.Printf("failed to send verification email to %s: %v\n", user.Email, err)
-		}
-	}()
+	go h.mailer.SendVerificationCode(req.Email, code)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"message":             "verification code sent to your email",
-		"email":               user.Email,
+		"email":               req.Email,
 		"requires_verification": true,
 	})
 }

@@ -56,7 +56,7 @@ func New(deps Dependencies) *chi.Mux {
 	uploadH := handlers.NewUploadHandler(deps.DB, deps.CloudinaryCloud, deps.CloudinaryKey, deps.CloudinarySecret)
 	adminH := handlers.NewAdminHandler(deps.DB, deps.Mailer)
 	suggestionH := handlers.NewSuggestionHandler(deps.DB)
-	verifyH := handlers.NewVerifyHandler(deps.DB, deps.Mailer)
+	verifyH := handlers.NewVerifyHandler(deps.DB, deps.Mailer, deps.JWTService)
 
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/register", authH.Register)
