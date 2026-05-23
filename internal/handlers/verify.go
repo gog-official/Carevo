@@ -40,9 +40,27 @@ func (h *VerifyHandler) SendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check pending_users first (new signups that haven't verified yet)
+	var pendingExists bool
+	h.db.Get(&pendingExists, `SELECT EXISTS(SELECT 1 FROM pending_users WHERE email = $1)`, req.Email)
+	if pendingExists {
+		code := generateCode()
+		_, err := h.db.Exec(
+			`UPDATE pending_users SET code = $1, expires_at = $2, updated_at = NOW() WHERE email = $3`,
+			code, time.Now().Add(10*time.Minute), req.Email,
+		)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate code"})
+			return
+		}
+		go h.mailer.SendVerificationCode(req.Email, code)
+		writeJSON(w, http.StatusOK, map[string]string{"message": "verification code sent"})
+		return
+	}
+
+	// Fallback: check users table for unverified users
 	var userID int64
-	var emailAddr string
-	err := h.db.QueryRow(`SELECT id, email FROM users WHERE email = $1 AND email_verified = false`, req.Email).Scan(&userID, &emailAddr)
+	err := h.db.QueryRow(`SELECT id FROM users WHERE email = $1 AND email_verified = false`, req.Email).Scan(&userID)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]string{"message": "if the email exists and is unverified, a code has been sent"})
 		return
@@ -58,12 +76,7 @@ func (h *VerifyHandler) SendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go func() {
-		if err := h.mailer.SendVerificationCode(emailAddr, code); err != nil {
-			fmt.Printf("failed to send verification email to %s: %v\n", emailAddr, err)
-		}
-	}()
-
+	go h.mailer.SendVerificationCode(req.Email, code)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "verification code sent"})
 }
 
@@ -79,37 +92,82 @@ func (h *VerifyHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userID int64
-	err := h.db.Get(&userID, `SELECT id FROM users WHERE email = $1 AND email_verified = false`, req.Email)
+	// Look up in pending_users (new signups)
+	var pending struct {
+		ID           int64  `db:"id"`
+		Email        string `db:"email"`
+		PasswordHash string `db:"password_hash"`
+		Name         string `db:"name"`
+		Code         string `db:"code"`
+	}
+	err := h.db.Get(&pending,
+		`SELECT id, email, password_hash, name, code FROM pending_users WHERE email = $1 AND expires_at > NOW()`,
+		req.Email,
+	)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		// Fallback: check verification_codes table for existing users
+		var userID int64
+		err = h.db.Get(&userID, `SELECT id FROM users WHERE email = $1 AND email_verified = false`, req.Email)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+			return
+		}
+
+		var codeID int64
+		err = h.db.Get(&codeID,
+			`SELECT id FROM verification_codes WHERE user_id = $1 AND code = $2 AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1`,
+			userID, req.Code,
+		)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or expired code"})
+			return
+		}
+
+		_, err = h.db.Exec(`UPDATE users SET email_verified = true, updated_at = NOW() WHERE id = $1`, userID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify email"})
+			return
+		}
+		h.db.Exec(`DELETE FROM verification_codes WHERE user_id = $1`, userID)
+
+		var user models.User
+		if err := h.db.Get(&user, `SELECT * FROM users WHERE id = $1`, userID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch user"})
+			return
+		}
+		h.writeTokenResponse(w, &user)
 		return
 	}
 
-	var codeID int64
-	err = h.db.Get(&codeID,
-		`SELECT id FROM verification_codes WHERE user_id = $1 AND code = $2 AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1`,
-		userID, req.Code,
-	)
-	if err != nil {
+	if pending.Code != req.Code {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or expired code"})
 		return
 	}
 
-	_, err = h.db.Exec(`UPDATE users SET email_verified = true, updated_at = NOW() WHERE id = $1`, userID)
+	// Move pending user to users table
+	var userID int64
+	err = h.db.Get(&userID,
+		`INSERT INTO users (email, password_hash, name, email_verified, created_at, updated_at)
+		 VALUES ($1, $2, $3, true, NOW(), NOW())
+		 RETURNING id`,
+		pending.Email, pending.PasswordHash, pending.Name,
+	)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify email"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create user"})
 		return
 	}
 
-	h.db.Exec(`DELETE FROM verification_codes WHERE user_id = $1`, userID)
+	h.db.Exec(`DELETE FROM pending_users WHERE id = $1`, pending.ID)
 
 	var user models.User
 	if err := h.db.Get(&user, `SELECT * FROM users WHERE id = $1`, userID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch user"})
 		return
 	}
+	h.writeTokenResponse(w, &user)
+}
 
+func (h *VerifyHandler) writeTokenResponse(w http.ResponseWriter, user *models.User) {
 	access, err := h.jwtService.GenerateAccessToken(user.ID, user.Email)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate tokens"})
@@ -122,14 +180,10 @@ func (h *VerifyHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.db.Exec(
+	h.db.Exec(
 		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
-		userID, hashed, time.Now().Add(h.jwtService.RefreshTokenTTL()),
+		user.ID, hashed, time.Now().Add(h.jwtService.RefreshTokenTTL()),
 	)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to store refresh token"})
-		return
-	}
 
 	tokens := TokenPair{AccessToken: access, RefreshToken: raw}
 
