@@ -151,6 +151,7 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 	}
 
 	var scored models.ScoredCareerList
+	firstResult := result
 	if err := json.Unmarshal([]byte(result), &scored); err != nil {
 		log.Printf("worker: parse response for user %d (retrying): %v", userID, err)
 		log.Printf("worker: raw response (%d chars): %.400s", len(result), result)
@@ -169,22 +170,26 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 			return
 		}
 
-		if err := json.Unmarshal([]byte(result), &scored); err != nil {
-			log.Printf("worker: raw retry response (%d chars): %.400s", len(result), result)
+		retryResult := result
+		if err := json.Unmarshal([]byte(retryResult), &scored); err != nil {
+			log.Printf("worker: raw retry response (%d chars): %.400s", len(retryResult), retryResult)
 
-			fixed := completeJSON([]byte(result))
-			log.Printf("worker: completed JSON (%d chars): %.400s", len(fixed), string(fixed))
+			// Try JSON completion on both retry and first responses
+			for _, raw := range []string{retryResult, firstResult} {
+				fixed := completeJSON([]byte(raw))
+				log.Printf("worker: completed JSON (%d chars): %.400s", len(fixed), string(fixed))
 
-			if err := json.Unmarshal(fixed, &scored); err == nil && len(scored.RecommendedCareers) > 0 {
-				log.Printf("worker: JSON completion succeeded for user %d", userID)
-				goto done
-			}
-
-			if parsed := extractJSON(result); parsed != nil {
-				log.Printf("worker: extractJSON (%d chars): %.400s", len(parsed), string(parsed))
-				if err := json.Unmarshal(parsed, &scored); err == nil && len(scored.RecommendedCareers) > 0 {
-					log.Printf("worker: extractJSON succeeded for user %d", userID)
+				if err := json.Unmarshal(fixed, &scored); err == nil && len(scored.RecommendedCareers) > 0 {
+					log.Printf("worker: JSON completion succeeded for user %d", userID)
 					goto done
+				}
+
+				if parsed := extractJSON(raw); parsed != nil {
+					log.Printf("worker: extractJSON (%d chars): %.400s", len(parsed), string(parsed))
+					if err := json.Unmarshal(parsed, &scored); err == nil && len(scored.RecommendedCareers) > 0 {
+						log.Printf("worker: extractJSON succeeded for user %d", userID)
+						goto done
+					}
 				}
 			}
 
