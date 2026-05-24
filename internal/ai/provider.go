@@ -44,18 +44,22 @@ type geminiPart struct {
 }
 
 type generationConfig struct {
-	ResponseMimeType string `json:"response_mime_type,omitempty"`
+	ResponseMimeType string  `json:"response_mime_type,omitempty"`
 	Temperature      float64 `json:"temperature,omitempty"`
+	MaxOutputTokens  int     `json:"max_output_tokens,omitempty"`
+}
+
+type geminiCandidate struct {
+	Content struct {
+		Parts []struct {
+			Text string `json:"text"`
+		} `json:"parts"`
+	} `json:"content"`
+	FinishReason string `json:"finishReason"`
 }
 
 type geminiResponse struct {
-	Candidates []struct {
-		Content struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
-		} `json:"content"`
-	} `json:"candidates"`
+	Candidates []geminiCandidate `json:"candidates"`
 }
 
 func (p *GeminiProvider) GenerateJSON(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
@@ -68,6 +72,7 @@ func (p *GeminiProvider) GenerateJSON(ctx context.Context, systemPrompt, userPro
 		GenerationConfig: &generationConfig{
 			ResponseMimeType: "application/json",
 			Temperature:      0.3,
+			MaxOutputTokens:  8192,
 		},
 	}
 
@@ -105,6 +110,11 @@ func (p *GeminiProvider) GenerateJSON(ctx context.Context, systemPrompt, userPro
 
 	if len(gr.Candidates) == 0 || len(gr.Candidates[0].Content.Parts) == 0 {
 		return "", fmt.Errorf("empty gemini response")
+	}
+
+	if gr.Candidates[0].FinishReason != "" && gr.Candidates[0].FinishReason != "STOP" {
+		text := gr.Candidates[0].Content.Parts[0].Text
+		return "", fmt.Errorf("gemini finish_reason=%q: %s", gr.Candidates[0].FinishReason, text)
 	}
 
 	return gr.Candidates[0].Content.Parts[0].Text, nil

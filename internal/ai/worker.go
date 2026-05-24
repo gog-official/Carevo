@@ -157,6 +157,7 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 	var scored models.ScoredCareerList
 	if err := json.Unmarshal([]byte(result), &scored); err != nil {
 		log.Printf("worker: parse response for user %d (retrying): %v", userID, err)
+		log.Printf("worker: raw response (%d chars): %.400s", len(result), result)
 
 		result, err = w.provider.GenerateJSON(ctx, systemPrompt, userPrompt)
 		if err != nil {
@@ -173,12 +174,22 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 		}
 
 		if err := json.Unmarshal([]byte(result), &scored); err != nil {
+			log.Printf("worker: raw retry response (%d chars): %.400s", len(result), result)
+
+			if parsed := extractJSON([]byte(result)); parsed != nil {
+				if err := json.Unmarshal(parsed, &scored); err == nil {
+					goto done
+				}
+			}
+
 			errMsg := fmt.Sprintf("failed to parse AI response after retry: %v", err)
 			w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg)
 			log.Printf("worker: parse response for user %d after retry: %v", userID, err)
 			return
 		}
 	}
+
+done:
 
 	for i := range scored.RecommendedCareers {
 		title := strings.TrimSpace(strings.ToLower(scored.RecommendedCareers[i].Title))
@@ -235,4 +246,28 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 	}
 
 	log.Printf("worker: completed for user %d with %d career matches", userID, len(scored.RecommendedCareers))
+}
+
+func extractJSON(in []byte) []byte {
+	s := string(in)
+
+	start := strings.Index(s, "{")
+	if start < 0 {
+		return nil
+	}
+	s = s[start:]
+
+	depth := 0
+	for i, c := range s {
+		switch c {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return []byte(s[:i+1])
+			}
+		}
+	}
+	return nil
 }
