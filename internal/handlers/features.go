@@ -99,6 +99,40 @@ func (h *FeatureHandler) ListBookmarks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"bookmarks": bookmarks})
 }
 
+// @Summary      Unbookmark a career
+// @Tags         bookmarks
+// @Produce      json
+// @Security     BearerAuth
+// @Param        career_id   path  int  true  "Career ID"
+// @Success      200  {object}  map[string]string
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Router       /users/me/bookmarks/{career_id} [delete]
+func (h *FeatureHandler) UnbookmarkCareer(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.UserFromCtx(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	careerID, err := strconv.ParseInt(chi.URLParam(r, "career_id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid career id"})
+		return
+	}
+
+	_, err = h.db.Exec(
+		`DELETE FROM bookmarks WHERE user_id = $1 AND career_id = $2`,
+		claims.UserID, careerID,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to unbookmark career"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "unbookmarked"})
+}
+
 // @Summary      Start a 30-day challenge
 // @Tags         challenges
 // @Accept       json

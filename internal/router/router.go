@@ -75,6 +75,7 @@ func New(deps Dependencies) *chi.Mux {
 		r.Post("/me/avatar", uploadH.UploadAvatar)
 		r.Post("/me/bookmarks", featureH.BookmarkCareer)
 		r.Get("/me/bookmarks", featureH.ListBookmarks)
+		r.Delete("/me/bookmarks/{career_id}", featureH.UnbookmarkCareer)
 	})
 
 	r.Route("/challenges", func(r chi.Router) {
