@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -171,17 +172,18 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 		if err := json.Unmarshal([]byte(result), &scored); err != nil {
 			log.Printf("worker: raw retry response (%d chars): %.400s", len(result), result)
 
-			fixed := fixMalformedJSON([]byte(result))
-			log.Printf("worker: fixed response (%d chars): %.400s", len(fixed), string(fixed))
+			fixed := completeJSON([]byte(result))
+			log.Printf("worker: completed JSON (%d chars): %.400s", len(fixed), string(fixed))
 
 			if err := json.Unmarshal(fixed, &scored); err == nil && len(scored.RecommendedCareers) > 0 {
-				log.Printf("worker: JSON repair succeeded for user %d", userID)
+				log.Printf("worker: JSON completion succeeded for user %d", userID)
 				goto done
 			}
 
-			if parsed := extractJSON(fixed); parsed != nil {
+			if parsed := extractJSON(result); parsed != nil {
+				log.Printf("worker: extractJSON (%d chars): %.400s", len(parsed), string(parsed))
 				if err := json.Unmarshal(parsed, &scored); err == nil && len(scored.RecommendedCareers) > 0 {
-					log.Printf("worker: extractJSON after repair succeeded for user %d", userID)
+					log.Printf("worker: extractJSON succeeded for user %d", userID)
 					goto done
 				}
 			}
@@ -252,95 +254,65 @@ done:
 	log.Printf("worker: completed for user %d with %d career matches", userID, len(scored.RecommendedCareers))
 }
 
-func extractJSON(in []byte) []byte {
-	s := string(in)
-
-	start := strings.Index(s, "{")
+func extractJSON(in string) []byte {
+	start := strings.Index(in, "{")
 	if start < 0 {
 		return nil
 	}
-	s = s[start:]
+	in = in[start:]
 
 	depth := 0
-	for i, c := range s {
+	for i, c := range in {
 		switch c {
 		case '{':
 			depth++
 		case '}':
 			depth--
 			if depth == 0 {
-				return []byte(s[:i+1])
+				return []byte(in[:i+1])
 			}
 		}
 	}
 	return nil
 }
 
-func fixMalformedJSON(in []byte) []byte {
-	s := string(in)
-
-	lines := strings.Split(s, "\n")
-	var fixed []string
-	inArray := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if strings.Contains(trimmed, `"recommended_careers"`) {
-			inArray = true
-			fixed = append(fixed, line)
+func completeJSON(in []byte) []byte {
+	b := []byte(bytes.TrimSpace(in))
+	inString := false
+	var openers []byte
+	for _, c := range b {
+		if c == '"' {
+			inString = !inString
+		}
+		if inString {
 			continue
 		}
-
-		if inArray && trimmed == "]" {
-			inArray = false
-			fixed = append(fixed, line)
-			continue
-		}
-
-		if inArray && trimmed == "[" {
-			fixed = append(fixed, line)
-			continue
-		}
-
-		if inArray {
-			hasBrace := strings.Contains(trimmed, "{")
-			startsWithQuote := strings.HasPrefix(trimmed, `"`)
-
-			if startsWithQuote && !hasBrace {
-				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-				fixed = append(fixed, indent+"{")
-				fixed = append(fixed, line)
-				continue
+		switch c {
+		case '{', '[':
+			openers = append(openers, c)
+		case '}':
+			if len(openers) > 0 && openers[len(openers)-1] == '{' {
+				openers = openers[:len(openers)-1]
 			}
-
-			if trimmed == "}" || trimmed == "}," {
-				continue
+		case ']':
+			if len(openers) > 0 && openers[len(openers)-1] == '[' {
+				openers = openers[:len(openers)-1]
 			}
-
-			if trimmed == `,` || trimmed == `` {
-				continue
-			}
-
-			if hasBrace && strings.HasPrefix(trimmed, "{") {
-				fixed = append(fixed, line)
-				continue
-			}
-
-			fixed = append(fixed, line)
-		} else {
-			fixed = append(fixed, line)
 		}
 	}
 
-	result := strings.Join(fixed, "\n")
-
-	if strings.HasSuffix(strings.TrimSpace(result), ",") {
-		result = strings.TrimRight(result, " \t,")
-	}
-	result = strings.TrimSpace(result)
-	if !strings.HasSuffix(result, "}") {
-		result += "\n}"
+	if inString {
+		b = append(b, '"')
 	}
 
-	return []byte(result)
+	for i := len(openers) - 1; i >= 0; i-- {
+		switch openers[i] {
+		case '{':
+			b = append(b, '\n', '}')
+		case '[':
+			b = append(b, '\n', ']')
+		}
+	}
+
+	return b
 }

@@ -58,7 +58,7 @@ func (p *HuggingFaceProvider) GenerateJSON(ctx context.Context, systemPrompt, us
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt + "\n\nRespond only with valid JSON."},
 		},
-		MaxTokens:   4096,
+		MaxTokens:   8192,
 		Temperature: 0.3,
 	}
 
@@ -114,7 +114,7 @@ func (p *HuggingFaceProvider) GenerateStream(ctx context.Context, systemPrompt, 
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		MaxTokens:   4096,
+		MaxTokens:   8192,
 		Temperature: 0.7,
 		Stream:      true,
 	}

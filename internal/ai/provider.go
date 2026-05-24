@@ -46,7 +46,7 @@ type geminiPart struct {
 type generationConfig struct {
 	ResponseMimeType string  `json:"response_mime_type,omitempty"`
 	Temperature      float64 `json:"temperature,omitempty"`
-	MaxOutputTokens  int     `json:"max_output_tokens,omitempty"`
+	MaxOutputTokens  int     `json:"maxOutputTokens,omitempty"`
 }
 
 type geminiCandidate struct {
