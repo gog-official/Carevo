@@ -67,9 +67,8 @@ func (p *HuggingFaceProvider) GenerateJSON(ctx context.Context, systemPrompt, us
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://router.huggingface.co/v1/chat/completions",
-		bytes.NewReader(body))
+	apiURL := "https://router.huggingface.co/v1/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -93,7 +92,7 @@ func (p *HuggingFaceProvider) GenerateJSON(ctx context.Context, systemPrompt, us
 
 	var result hfChatResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
+		return "", fmt.Errorf("parse response (%d bytes): %w. body: %s", len(respBody), err, string(respBody))
 	}
 
 	if len(result.Choices) == 0 {
@@ -125,9 +124,8 @@ func (p *HuggingFaceProvider) GenerateStream(ctx context.Context, systemPrompt, 
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://router.huggingface.co/v1/chat/completions",
-		bytes.NewReader(body))
+	apiURL := "https://router.huggingface.co/v1/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}

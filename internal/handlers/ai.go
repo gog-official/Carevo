@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ func (h *AIHandler) SurveyQuestions(w http.ResponseWriter, r *http.Request) {
 	var questions []models.SurveyQuestion
 	err := h.db.Select(&questions, `SELECT id, category, question_text, options, sort_order FROM survey_questions ORDER BY sort_order`)
 	if err != nil {
+		log.Printf("survey questions: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
@@ -86,6 +88,7 @@ func (h *AIHandler) SubmitSurvey(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := h.db.Beginx()
 	if err != nil {
+		log.Printf("submit survey begin tx: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
@@ -136,12 +139,13 @@ func (h *AIHandler) GetResults(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var result models.AIResult
-	err := h.db.Get(&result, `SELECT id, user_id, recommended_careers, status, error_message, created_at, completed_at FROM ai_results WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, claims.UserID)
+	err := h.db.Get(&result, `SELECT id, user_id, COALESCE(recommended_careers, '[]'::jsonb) AS recommended_careers, status, error_message, created_at, completed_at FROM ai_results WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, claims.UserID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no results yet. submit the survey first."})
 			return
 		}
+		log.Printf("get results for user %d: %v", claims.UserID, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
@@ -192,12 +196,13 @@ func (h *AIHandler) GetRoadmap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var result models.AIResult
-	err := h.db.Get(&result, `SELECT id, user_id, recommended_careers, status FROM ai_results WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, claims.UserID)
+	err := h.db.Get(&result, `SELECT id, user_id, COALESCE(recommended_careers, '[]'::jsonb) AS recommended_careers, status FROM ai_results WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, claims.UserID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no results yet. submit the survey first."})
 			return
 		}
+		log.Printf("get roadmap for user %d: %v", claims.UserID, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
@@ -281,6 +286,7 @@ func (h *AIHandler) GetCareerScore(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "score not found. complete the survey first."})
 			return
 		}
+		log.Printf("get career score for user %d career %d: %v", claims.UserID, careerID, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
@@ -325,6 +331,7 @@ func (h *AIHandler) ChatStream(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "career not found"})
 			return
 		}
+		log.Printf("chat stream career lookup %d: %v", req.CareerID, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
@@ -405,6 +412,7 @@ func (h *AIHandler) CareerChat(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "career not found"})
 			return
 		}
+		log.Printf("career chat by slug %s: %v", slug, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}

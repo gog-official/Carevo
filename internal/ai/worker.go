@@ -143,30 +143,41 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 	result, err := w.provider.GenerateJSON(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		errMsg := fmt.Sprintf("AI provider error: %v", err)
-		if _, uerr := w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg); uerr != nil {
-			log.Printf("worker: update error for user %d: %v", userID, uerr)
-		}
+		w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg)
 		log.Printf("worker: ai generate for user %d: %v", userID, err)
 		return
 	}
 
 	if strings.TrimSpace(result) == "" {
-		errMsg := "AI returned empty response"
-		if _, uerr := w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg); uerr != nil {
-			log.Printf("worker: update error for user %d: %v", userID, uerr)
-		}
+		w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = 'AI returned empty response' WHERE user_id = $1`, userID)
 		log.Printf("worker: empty response for user %d", userID)
 		return
 	}
 
 	var scored models.ScoredCareerList
 	if err := json.Unmarshal([]byte(result), &scored); err != nil {
-		errMsg := fmt.Sprintf("failed to parse AI response: %v", err)
-		if _, uerr := w.db.Exec(`UPDATE ai_results SET raw_response = NULL, status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg); uerr != nil {
-			log.Printf("worker: update error for user %d: %v", userID, uerr)
+		log.Printf("worker: parse response for user %d (retrying): %v", userID, err)
+
+		result, err = w.provider.GenerateJSON(ctx, systemPrompt, userPrompt)
+		if err != nil {
+			errMsg := fmt.Sprintf("AI provider error (retry): %v", err)
+			w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg)
+			log.Printf("worker: ai generate retry for user %d: %v", userID, err)
+			return
 		}
-		log.Printf("worker: parse response for user %d: %v", userID, err)
-		return
+
+		if strings.TrimSpace(result) == "" {
+			w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = 'AI returned empty response (retry)' WHERE user_id = $1`, userID)
+			log.Printf("worker: empty response on retry for user %d", userID)
+			return
+		}
+
+		if err := json.Unmarshal([]byte(result), &scored); err != nil {
+			errMsg := fmt.Sprintf("failed to parse AI response after retry: %v", err)
+			w.db.Exec(`UPDATE ai_results SET status = 'error', error_message = $2 WHERE user_id = $1`, userID, errMsg)
+			log.Printf("worker: parse response for user %d after retry: %v", userID, err)
+			return
+		}
 	}
 
 	for i := range scored.RecommendedCareers {

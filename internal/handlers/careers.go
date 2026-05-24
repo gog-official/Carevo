@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -70,6 +71,7 @@ func (h *CareerHandler) List(w http.ResponseWriter, r *http.Request) {
 	var total int
 	countQuery := `SELECT COUNT(*) FROM careers c WHERE ` + whereClause
 	if err := h.db.Get(&total, countQuery, args...); err != nil {
+		log.Printf("careers list count: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
@@ -84,6 +86,7 @@ func (h *CareerHandler) List(w http.ResponseWriter, r *http.Request) {
 	args = append(args, limit, offset)
 
 	if err := h.db.Select(&careers, query, args...); err != nil {
+		log.Printf("careers list select: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
