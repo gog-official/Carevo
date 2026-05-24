@@ -114,23 +114,18 @@ func (w *Worker) process(ctx context.Context, userID int64) {
 
 	systemPrompt := `You are a career counselor for Nepal. Your job is to match users to careers based on their survey answers.
 
-Return ONLY valid JSON with this exact structure:
-{
-  "recommended_careers": [
-    {
-      "title": "Exact Career Title",
-      "score": 85,
-      "reasoning": "2-3 sentence explanation why this career fits"
-    }
-  ]
-}
+Return ONLY valid JSON. Every array element inside "recommended_careers" MUST start with {"title":...}. This is the exact format:
 
-Rules:
+{"recommended_careers":[{"title":"Exact Career Title","score":85,"reasoning":"2-3 sentence explanation why this career fits"}]}
+
+CRITICAL RULES — follow these exactly:
+- EVERY element in the recommended_careers array MUST start with {"title" — never omit the opening brace
 - Score must be 0-100
 - Return 5-10 career matches sorted by score descending
 - Use the EXACT career title from the provided list — copy it character for character
 - Be realistic about Nepal job market conditions
-- Consider education requirements, skills, and local demand`
+- Consider education requirements, skills, and local demand
+- Return ONLY the JSON object, no markdown, no code fences, no extra text`
 
 	userPrompt := fmt.Sprintf(`Here are the user's survey answers:
 %s
@@ -176,8 +171,17 @@ Return the top career matches as JSON.`, string(qaJSON), strings.Join(careerName
 		if err := json.Unmarshal([]byte(result), &scored); err != nil {
 			log.Printf("worker: raw retry response (%d chars): %.400s", len(result), result)
 
-			if parsed := extractJSON([]byte(result)); parsed != nil {
-				if err := json.Unmarshal(parsed, &scored); err == nil {
+			fixed := fixMalformedJSON([]byte(result))
+			log.Printf("worker: fixed response (%d chars): %.400s", len(fixed), string(fixed))
+
+			if err := json.Unmarshal(fixed, &scored); err == nil && len(scored.RecommendedCareers) > 0 {
+				log.Printf("worker: JSON repair succeeded for user %d", userID)
+				goto done
+			}
+
+			if parsed := extractJSON(fixed); parsed != nil {
+				if err := json.Unmarshal(parsed, &scored); err == nil && len(scored.RecommendedCareers) > 0 {
+					log.Printf("worker: extractJSON after repair succeeded for user %d", userID)
 					goto done
 				}
 			}
@@ -270,4 +274,73 @@ func extractJSON(in []byte) []byte {
 		}
 	}
 	return nil
+}
+
+func fixMalformedJSON(in []byte) []byte {
+	s := string(in)
+
+	lines := strings.Split(s, "\n")
+	var fixed []string
+	inArray := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.Contains(trimmed, `"recommended_careers"`) {
+			inArray = true
+			fixed = append(fixed, line)
+			continue
+		}
+
+		if inArray && trimmed == "]" {
+			inArray = false
+			fixed = append(fixed, line)
+			continue
+		}
+
+		if inArray && trimmed == "[" {
+			fixed = append(fixed, line)
+			continue
+		}
+
+		if inArray {
+			hasBrace := strings.Contains(trimmed, "{")
+			startsWithQuote := strings.HasPrefix(trimmed, `"`)
+
+			if startsWithQuote && !hasBrace {
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				fixed = append(fixed, indent+"{")
+				fixed = append(fixed, line)
+				continue
+			}
+
+			if trimmed == "}" || trimmed == "}," {
+				continue
+			}
+
+			if trimmed == `,` || trimmed == `` {
+				continue
+			}
+
+			if hasBrace && strings.HasPrefix(trimmed, "{") {
+				fixed = append(fixed, line)
+				continue
+			}
+
+			fixed = append(fixed, line)
+		} else {
+			fixed = append(fixed, line)
+		}
+	}
+
+	result := strings.Join(fixed, "\n")
+
+	if strings.HasSuffix(strings.TrimSpace(result), ",") {
+		result = strings.TrimRight(result, " \t,")
+	}
+	result = strings.TrimSpace(result)
+	if !strings.HasSuffix(result, "}") {
+		result += "\n}"
+	}
+
+	return []byte(result)
 }
